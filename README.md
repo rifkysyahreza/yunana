@@ -10,6 +10,8 @@ Monitors Solana chain activity from now forward, extracts candidate token mints 
 4. Fetch GMGN token info and apply ratio (only when `FORWARD_ALL_MIGRATED=false`):
    `sol_per_10k_mc = (total_fee * 10000) / market_cap`
    Keep token if `MIN_SOL_PER_10K_MC <= sol_per_10k_mc <= MAX_SOL_PER_10K_MC`.
+5. Volume gate: 1m candles at migrated minute + next closed minute.
+   Keep token if `(candle_0_volume + candle_1_volume) / 2 >= MIN_TWO_CANDLE_AVG_VOLUME`.
 5. Search Meteora DLMM pool.
 6. Send Telegram message.
 
@@ -33,6 +35,7 @@ npm install
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
 - Optional: `MAX_SOL_PER_10K_MC` (default `1`)
+- Optional: `MIN_TWO_CANDLE_AVG_VOLUME` (default `18000`)
 - Optional: `GMGN_RETRY_COUNT` (default `5`)
 - Optional: `GMGN_RETRY_DELAY_MS` (default `2500`)
 - Optional: `GMGN_QUOTE_WALLET` (wallet id used in GMGN quotation endpoint path)
@@ -50,3 +53,4 @@ npm run dev
 - Migration detection is currently migration-only (`migrate` signal in logs/instructions).
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
 - Tokens with `launchpad_platform = pump_mayhem` are ignored.
+- Hard security gate: token is ignored unless `renounced_mint=true` and `renounced_freeze_account=true`.

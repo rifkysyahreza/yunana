@@ -33,6 +33,7 @@ type GmgnToken = {
   symbol?: string;
   name?: string;
   banner?: string;
+  migrated_timestamp?: number;
   total_fee?: string | number;
   market_cap?: string | number;
   marketcap?: string | number;
@@ -46,11 +47,25 @@ type GmgnToken = {
 type GmgnMultiToken = {
   address: string;
   launchpad_platform?: string;
+  migrated_timestamp?: number;
+};
+
+type GmgnTokenSecurity = {
+  address: string;
+  renounced_mint?: boolean;
+  renounced_freeze_account?: boolean;
+};
+
+type GmgnMcapCandle = {
+  time?: number;
+  volume?: string | number;
 };
 
 type MeteoraPool = {
   pool_address?: string;
 };
+
+type MeteoraPoolType = "dlmm" | "damm_v2";
 
 const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
@@ -61,6 +76,11 @@ const FORWARD_ALL_MIGRATED =
   (process.env.FORWARD_ALL_MIGRATED ?? "false").toLowerCase() === "true";
 const MIN_SOL_PER_10K_MC = Number(process.env.MIN_SOL_PER_10K_MC ?? "0.8");
 const MAX_SOL_PER_10K_MC = Number(process.env.MAX_SOL_PER_10K_MC ?? "1");
+const MIN_TWO_CANDLE_AVG_VOLUME = Number(
+  process.env.MIN_TWO_CANDLE_AVG_VOLUME ?? "18000",
+);
+const DEBUG_CANDLE_SELECTION =
+  (process.env.DEBUG_CANDLE_SELECTION ?? "false").toLowerCase() === "true";
 const GMGN_RETRY_COUNT = Number(process.env.GMGN_RETRY_COUNT ?? "5");
 const GMGN_RETRY_DELAY_MS = Number(process.env.GMGN_RETRY_DELAY_MS ?? "2500");
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
@@ -69,6 +89,9 @@ const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
 const GMGN_MULTI_TOKEN_INFO_URL = "https://gmgn.ai/mrwapi/v1/multi_token_info";
+const GMGN_TOKEN_SECURITY_URL = "https://gmgn.ai/api/v1/token_security_sol/sol";
+const GMGN_TOKEN_MCAP_CANDLES_URL =
+  "https://gmgn.ai/api/v1/token_mcap_candles/sol";
 const GMGN_QUOTE_API_URL =
   "https://gmgn.ai/defi/quotation/v1/smartmoney/sol/walletstat";
 const GMGN_QUOTE_WALLET =
@@ -86,6 +109,11 @@ if (WATCH_ADDRESSES.length === 0) {
 
 const newestSignatureByAddress = new Map<string, string>();
 const seenMints = new Map<string, number>();
+const deferredVolumeMints = new Set<string>();
+const deferredVolumeCandidates = new Map<
+  string,
+  { signature: string; migratedTimestamp: number }
+>();
 
 async function main(): Promise<void> {
   console.log(`[boot] monitor start. interval=${SCAN_INTERVAL_MS}ms`);
@@ -94,6 +122,7 @@ async function main(): Promise<void> {
   console.log(
     `[boot] ratio gate sol_per_10k_mc=${MIN_SOL_PER_10K_MC}..${MAX_SOL_PER_10K_MC}`,
   );
+  console.log(`[boot] volume gate 2x1m avg >= ${MIN_TWO_CANDLE_AVG_VOLUME}`);
   if (FORWARD_ALL_MIGRATED) {
     console.log(
       "[boot] ratio filter is DISABLED because FORWARD_ALL_MIGRATED=true",
@@ -120,6 +149,7 @@ async function bootstrapCursors(): Promise<void> {
 async function scanTick(): Promise<void> {
   try {
     pruneSeenMints();
+    await processDeferredVolumeCandidates();
     for (const address of WATCH_ADDRESSES) {
       await scanAddress(address);
     }
@@ -170,33 +200,140 @@ async function processSignature(signature: string): Promise<void> {
       continue;
     }
     seenMints.set(mint, Date.now());
+    await processMintCandidate(mint, signature, undefined, "new");
+  }
+}
 
-    const [gmgn, launchpadInfo, quotedMarketCap] = await Promise.all([
+async function processDeferredVolumeCandidates(): Promise<void> {
+  for (const [mint, candidate] of deferredVolumeCandidates.entries()) {
+    await processMintCandidate(
+      mint,
+      candidate.signature,
+      candidate.migratedTimestamp,
+      "deferred",
+    );
+  }
+}
+
+async function processMintCandidate(
+  mint: string,
+  signature: string,
+  migratedTimestampHint?: number,
+  source: "new" | "deferred" = "new",
+): Promise<void> {
+  const [gmgn, launchpadInfo, securityInfo, quotedMarketCap] =
+    await Promise.all([
       fetchGmgnTokenWithRetry(mint),
       fetchGmgnLaunchpadInfo(mint),
+      fetchGmgnTokenSecurity(mint),
       fetchGmgnQuoteMarketCap(mint),
     ]);
 
-    if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
-      console.log(`[skip] ${mint} launchpad_platform=pump_mayhem`);
-      continue;
-    }
+  if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
+    deferredVolumeCandidates.delete(mint);
+    deferredVolumeMints.delete(mint);
+    console.log(`[skip] ${mint} launchpad_platform=pump_mayhem`);
+    return;
+  }
+  if (
+    securityInfo?.renounced_mint !== true ||
+    securityInfo.renounced_freeze_account !== true
+  ) {
+    deferredVolumeCandidates.delete(mint);
+    deferredVolumeMints.delete(mint);
+    console.log(
+      `[skip] ${mint} security gate failed (renounced_mint=${String(
+        securityInfo?.renounced_mint,
+      )}, renounced_freeze_account=${String(
+        securityInfo?.renounced_freeze_account,
+      )})`,
+    );
+    return;
+  }
 
-    const totalFee = toNumber(gmgn?.total_fee);
-    const marketCap =
-      quotedMarketCap ??
-      toNumber(gmgn?.market_cap) ??
-      toNumber(gmgn?.marketcap) ??
-      toNumber(gmgn?.fdv);
-    if (
-      !FORWARD_ALL_MIGRATED &&
-      !passesFeeMarketCapRatio(totalFee, marketCap)
-    ) {
-      continue;
-    }
+  const migratedTimestamp =
+    toNumber(launchpadInfo?.migrated_timestamp) ??
+    toNumber(gmgn?.migrated_timestamp) ??
+    migratedTimestampHint;
+  if (!migratedTimestamp) {
+    deferredVolumeCandidates.delete(mint);
+    deferredVolumeMints.delete(mint);
+    console.log(`[skip] ${mint} missing migrated_timestamp`);
+    return;
+  }
 
-    const pool = await searchMeteoraDlmmPool(mint);
-    await sendTelegramAlert(gmgn, mint, totalFee, marketCap, pool, signature);
+  const twoCandleVolume = await fetchTwoCandleAverageVolume(
+    mint,
+    migratedTimestamp,
+  );
+  if (twoCandleVolume.status !== "ok") {
+    deferredVolumeMints.add(mint);
+    deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
+    if (source === "new") {
+      console.log(
+        `[defer] ${mint} volume gate waiting (${twoCandleVolume.reason})`,
+      );
+    }
+    return;
+  }
+  if (deferredVolumeMints.has(mint)) {
+    console.log(
+      `[resume] ${mint} volume gate ready avg=${twoCandleVolume.average.toFixed(2)}`,
+    );
+  }
+  if (twoCandleVolume.average < MIN_TWO_CANDLE_AVG_VOLUME) {
+    deferredVolumeCandidates.delete(mint);
+    if (deferredVolumeMints.has(mint)) {
+      deferredVolumeMints.delete(mint);
+      console.log(
+        `[skip] ${mint} deferred token failed volume gate avg=${twoCandleVolume.average.toFixed(2)}`,
+      );
+      return;
+    }
+    console.log(
+      `[skip] ${mint} volume gate failed avg=${twoCandleVolume.average.toFixed(2)}`,
+    );
+    return;
+  }
+  if (deferredVolumeMints.has(mint)) {
+    console.log(
+      `[pass] ${mint} deferred token passed volume gate avg=${twoCandleVolume.average.toFixed(2)}`,
+    );
+  }
+
+  const totalFee = toNumber(gmgn?.total_fee);
+  const marketCap =
+    quotedMarketCap ??
+    toNumber(gmgn?.market_cap) ??
+    toNumber(gmgn?.marketcap) ??
+    toNumber(gmgn?.fdv);
+  if (!FORWARD_ALL_MIGRATED && !passesFeeMarketCapRatio(totalFee, marketCap)) {
+    deferredVolumeCandidates.delete(mint);
+    deferredVolumeMints.delete(mint);
+    return;
+  }
+
+  const [dlmmPool, dammV2Pool] = await Promise.all([
+    searchMeteoraPoolByType(mint, "dlmm"),
+    searchMeteoraPoolByType(mint, "damm_v2"),
+  ]);
+  const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
+  const latestMarketCap = latestQuotedMarketCap ?? marketCap;
+  await sendTelegramAlert(
+    gmgn,
+    mint,
+    totalFee,
+    latestMarketCap,
+    dlmmPool,
+    dammV2Pool,
+    twoCandleVolume.average,
+    signature,
+  );
+  deferredVolumeCandidates.delete(mint);
+  if (deferredVolumeMints.has(mint)) {
+    deferredVolumeMints.delete(mint);
+    console.log(`[alert] sent for ${mint} from ${signature} (after defer)`);
+  } else {
     console.log(`[alert] sent for ${mint} from ${signature}`);
   }
 }
@@ -320,6 +457,32 @@ async function fetchGmgnLaunchpadInfo(
   return json.data?.[0] ?? null;
 }
 
+async function fetchGmgnTokenSecurity(
+  mint: string,
+): Promise<GmgnTokenSecurity | null> {
+  const res = await fetch(`${GMGN_TOKEN_SECURITY_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const json = (await res.json()) as {
+    data?: GmgnTokenSecurity;
+    code?: number;
+  };
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
 async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   const url = new URL(`${GMGN_QUOTE_API_URL}/${GMGN_QUOTE_WALLET}`);
   url.searchParams.set("token_address", mint);
@@ -347,14 +510,83 @@ async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   return toNumber(json.data?.market_cap);
 }
 
-async function searchMeteoraDlmmPool(
+async function fetchTwoCandleAverageVolume(
   mint: string,
+  migratedTimestampSec: number,
+): Promise<
+  { status: "ok"; average: number } | { status: "not_ready"; reason: string }
+> {
+  const migratedCandleMs = Math.floor(migratedTimestampSec / 60) * 60 * 1000;
+  const afterCandleMs = migratedCandleMs + 60_000;
+  const thirdCandleMs = afterCandleMs + 60_000;
+
+  const url = new URL(`${GMGN_TOKEN_MCAP_CANDLES_URL}/${mint}`);
+  url.searchParams.set("pool_type", "tpool");
+  url.searchParams.set("resolution", "1m");
+  url.searchParams.set("limit", "20");
+
+  const res = await fetch(url.toString(), {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+  if (!res.ok) {
+    return { status: "not_ready", reason: `candles_http_${res.status}` };
+  }
+
+  const json = (await res.json()) as {
+    code?: number;
+    data?: { list?: GmgnMcapCandle[] };
+  };
+  if (json.code !== undefined && json.code !== 0) {
+    return { status: "not_ready", reason: `candles_code_${String(json.code)}` };
+  }
+
+  const list = Array.isArray(json.data?.list) ? json.data.list : [];
+  const byTime = new Map<number, GmgnMcapCandle>();
+  for (const c of list) {
+    if (typeof c.time === "number") {
+      byTime.set(c.time, c);
+    }
+  }
+
+  const candle0 = byTime.get(migratedCandleMs);
+  const candle1 = byTime.get(afterCandleMs);
+  const candle2 = byTime.get(thirdCandleMs);
+  if (!candle0 || !candle1 || !candle2) {
+    return { status: "not_ready", reason: "candle_not_closed_yet" };
+  }
+
+  const v0 = toNumber(candle0.volume);
+  const v1 = toNumber(candle1.volume);
+  if (v0 === null || v1 === null) {
+    return { status: "not_ready", reason: "candle_volume_missing" };
+  }
+
+  if (DEBUG_CANDLE_SELECTION) {
+    console.log(
+      `[candle] ${mint} migrated_ts=${migratedTimestampSec} candle0=${migratedCandleMs} vol0=${v0.toFixed(6)} candle1=${afterCandleMs} vol1=${v1.toFixed(6)} avg=${((v0 + v1) / 2).toFixed(6)}`,
+    );
+  }
+
+  return { status: "ok", average: (v0 + v1) / 2 };
+}
+
+async function searchMeteoraPoolByType(
+  mint: string,
+  poolType: MeteoraPoolType,
 ): Promise<MeteoraPool | null> {
   const url = new URL(METEORA_SEARCH_URL);
   url.searchParams.set("page_size", "100");
   url.searchParams.set("query", mint);
   url.searchParams.set("sort_by", "volume_24h:desc,tvl:desc");
-  url.searchParams.set("filter_by", "is_blacklisted=false && pool_type=dlmm");
+  url.searchParams.set(
+    "filter_by",
+    `is_blacklisted=false && pool_type=${poolType}`,
+  );
 
   const res = await fetch(url.toString());
   if (!res.ok) {
@@ -371,19 +603,29 @@ async function sendTelegramAlert(
   mint: string,
   totalFee: number | null,
   marketCap: number | null,
-  pool: MeteoraPool | null,
+  dlmmPool: MeteoraPool | null,
+  dammV2Pool: MeteoraPool | null,
+  twoCandleAvgVolume: number,
   signature: string,
 ): Promise<void> {
-  const poolAddress = pool?.pool_address ?? "None";
+  const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
+  const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
   const gmgnLink = `https://gmgn.ai/sol/token/${mint}`;
-  const hasMeteoraPool = poolAddress !== "None";
-  const meteoraLink = hasMeteoraPool
-    ? `https://app.meteora.ag/dlmm/${poolAddress}`
-    : null;
+  const dlmmLink =
+    dlmmPoolAddress !== "None"
+      ? `https://app.meteora.ag/dlmm/${dlmmPoolAddress}`
+      : null;
+  const dammV2Link =
+    dammV2PoolAddress !== "None"
+      ? `https://app.meteora.ag/dammv2/${dammV2PoolAddress}`
+      : null;
 
   const quickActions = [`<a href="${gmgnLink}">GMGN</a>`];
-  if (meteoraLink) {
-    quickActions.push(`<a href="${meteoraLink}">Meteora</a>`);
+  if (dlmmLink) {
+    quickActions.push(`<a href="${dlmmLink}">Meteora DLMM</a>`);
+  }
+  if (dammV2Link) {
+    quickActions.push(`<a href="${dammV2Link}">Meteora DAMMV2</a>`);
   }
 
   const text = [
@@ -395,9 +637,11 @@ async function sendTelegramAlert(
     "<u>Token Stat</u>",
     `Total fee: ${fmtNum(totalFee)}`,
     `Market cap: ${fmtNum(marketCap)}`,
+    `2x1m Avg Volume: ${fmtNum(twoCandleAvgVolume)}`,
     "",
     "<u>Meteora Pool</u>",
-    `Pool Address: ${poolAddress === "None" ? "None" : `<code>${escapeHtml(poolAddress)}</code>`}`,
+    `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
+    `DAMMV2 Pool: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
     "",
     "<u>Quick Action</u>",
     ...quickActions,
