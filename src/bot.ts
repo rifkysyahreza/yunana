@@ -70,6 +70,7 @@ type MeteoraPoolType = "dlmm" | "damm_v2";
 const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
+const BOT_STARTED_AT = Date.now();
 
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS ?? "15000");
 const FORWARD_ALL_MIGRATED =
@@ -114,6 +115,8 @@ const deferredVolumeCandidates = new Map<
   string,
   { signature: string; migratedTimestamp: number }
 >();
+let telegramUpdateOffset = 0;
+let telegramBotUsername = "";
 
 async function main(): Promise<void> {
   console.log(`[boot] monitor start. interval=${SCAN_INTERVAL_MS}ms`);
@@ -130,6 +133,7 @@ async function main(): Promise<void> {
   }
 
   await bootstrapCursors();
+  void startTelegramPingListener();
   setInterval(scanTick, SCAN_INTERVAL_MS);
   await scanTick();
 }
@@ -720,6 +724,99 @@ async function sendTelegramPhotoWithFallback(
       },
     );
   }
+}
+
+async function startTelegramPingListener(): Promise<void> {
+  try {
+    telegramBotUsername = await fetchTelegramBotUsername();
+    console.log(`[telegram] ping listener enabled for @${telegramBotUsername}`);
+  } catch (err) {
+    console.error("[telegram] ping listener disabled (getMe failed)", err);
+    return;
+  }
+
+  let polling = false;
+  setInterval(async () => {
+    if (polling) {
+      return;
+    }
+    polling = true;
+    try {
+      await pollTelegramUpdates();
+    } catch (err) {
+      console.error("[telegram] poll error", err);
+    } finally {
+      polling = false;
+    }
+  }, 5000);
+}
+
+async function fetchTelegramBotUsername(): Promise<string> {
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+  if (!res.ok) {
+    throw new Error(`getMe http ${res.status}`);
+  }
+  const json = (await res.json()) as {
+    ok?: boolean;
+    result?: { username?: string };
+  };
+  const username = json.result?.username?.trim();
+  if (!json.ok || !username) {
+    throw new Error("getMe response missing username");
+  }
+  return username;
+}
+
+async function pollTelegramUpdates(): Promise<void> {
+  const url = new URL(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`);
+  url.searchParams.set("timeout", "0");
+  url.searchParams.set("limit", "50");
+  if (telegramUpdateOffset > 0) {
+    url.searchParams.set("offset", String(telegramUpdateOffset));
+  }
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    throw new Error(`getUpdates http ${res.status}`);
+  }
+
+  const json = (await res.json()) as {
+    ok?: boolean;
+    result?: Array<{
+      update_id: number;
+      message?: { text?: string; chat?: { id?: number | string } };
+    }>;
+  };
+  const updates = Array.isArray(json.result) ? json.result : [];
+  for (const update of updates) {
+    telegramUpdateOffset = Math.max(telegramUpdateOffset, update.update_id + 1);
+    const text = update.message?.text ?? "";
+    const chatId = update.message?.chat?.id;
+    if (!text || chatId === undefined || chatId === null) {
+      continue;
+    }
+    if (isTaggedPing(text)) {
+      await respondPong(chatId);
+    }
+  }
+}
+
+function isTaggedPing(text: string): boolean {
+  const lower = text.toLowerCase();
+  const mention = `@${telegramBotUsername.toLowerCase()}`;
+  return lower.includes("ping") && lower.includes(mention);
+}
+
+async function respondPong(chatId: number | string): Promise<void> {
+  const uptimeSec = Math.floor((Date.now() - BOT_STARTED_AT) / 1000);
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: `pong\nuptime: ${uptimeSec}s`,
+    }),
+  });
 }
 
 function sleep(ms: number): Promise<void> {
