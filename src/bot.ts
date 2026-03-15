@@ -239,9 +239,20 @@ async function processMintCandidate(
     console.log(`[skip] ${mint} launchpad_platform=pump_mayhem`);
     return;
   }
+  const hasSecurityFlags =
+    typeof securityInfo?.renounced_mint === "boolean" &&
+    typeof securityInfo?.renounced_freeze_account === "boolean";
+  if (!hasSecurityFlags) {
+    deferredVolumeCandidates.set(mint, {
+      signature,
+      migratedTimestamp: migratedTimestampHint ?? 0,
+    });
+    console.log(`[defer] ${mint} security data not ready`);
+    return;
+  }
   if (
-    securityInfo?.renounced_mint !== true ||
-    securityInfo.renounced_freeze_account !== true
+    securityInfo?.renounced_mint === false ||
+    securityInfo?.renounced_freeze_account === false
   ) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
@@ -477,10 +488,20 @@ async function fetchGmgnTokenSecurity(
     return null;
   }
 
-  const json = (await res.json()) as {
-    data?: GmgnTokenSecurity;
-    code?: number;
-  };
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTokenSecurity; code?: number };
+  try {
+    json = (await res.json()) as {
+      data?: GmgnTokenSecurity;
+      code?: number;
+    };
+  } catch {
+    return null;
+  }
   if (json.code !== undefined && json.code !== 0) {
     return null;
   }
