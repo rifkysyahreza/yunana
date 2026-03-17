@@ -27,6 +27,17 @@ export type ScreenFeatures = {
   solPer10kMc: number | null;
   holderCount: number | null;
   top10HolderRate: number | null;
+  creatorHoldRate: number | null;
+  devTeamHoldRate: number | null;
+  privateVaultHoldRate: number | null;
+  topBundlerTraderPercentage: number | null;
+  topEntrapmentTraderPercentage: number | null;
+  freshWalletRate: number | null;
+  bluechipOwnerPercentage: number | null;
+  botDegenRate: number | null;
+  buyTax: number | null;
+  sellTax: number | null;
+  hideRisk: boolean | null;
   renouncedMint: boolean | null;
   renouncedFreezeAccount: boolean | null;
   launchpadPlatform: string | null;
@@ -71,6 +82,7 @@ export type ScreenScore = {
   finalScore: number;
   verdict: "reject" | "watch" | "tradeable" | "high-risk-momentum" | "strong-structure";
   reasons: string[];
+  rejectReasons: string[];
 };
 
 export type BuildScreenFeaturesInput = {
@@ -82,6 +94,17 @@ export type BuildScreenFeaturesInput = {
   totalFee?: number | null;
   holderCount?: number | null;
   top10HolderRate?: number | null;
+  creatorHoldRate?: number | null;
+  devTeamHoldRate?: number | null;
+  privateVaultHoldRate?: number | null;
+  topBundlerTraderPercentage?: number | null;
+  topEntrapmentTraderPercentage?: number | null;
+  freshWalletRate?: number | null;
+  bluechipOwnerPercentage?: number | null;
+  botDegenRate?: number | null;
+  buyTax?: number | null;
+  sellTax?: number | null;
+  hideRisk?: boolean | null;
   renouncedMint?: boolean | null;
   renouncedFreezeAccount?: boolean | null;
   launchpadPlatform?: string | null;
@@ -174,6 +197,17 @@ export function buildScreenFeatures(input: BuildScreenFeaturesInput): ScreenFeat
         : null,
     holderCount: input.holderCount ?? null,
     top10HolderRate: input.top10HolderRate ?? null,
+    creatorHoldRate: input.creatorHoldRate ?? null,
+    devTeamHoldRate: input.devTeamHoldRate ?? null,
+    privateVaultHoldRate: input.privateVaultHoldRate ?? null,
+    topBundlerTraderPercentage: input.topBundlerTraderPercentage ?? null,
+    topEntrapmentTraderPercentage: input.topEntrapmentTraderPercentage ?? null,
+    freshWalletRate: input.freshWalletRate ?? null,
+    bluechipOwnerPercentage: input.bluechipOwnerPercentage ?? null,
+    botDegenRate: input.botDegenRate ?? null,
+    buyTax: input.buyTax ?? null,
+    sellTax: input.sellTax ?? null,
+    hideRisk: input.hideRisk ?? null,
     renouncedMint: input.renouncedMint ?? null,
     renouncedFreezeAccount: input.renouncedFreezeAccount ?? null,
     launchpadPlatform: input.launchpadPlatform ?? null,
@@ -219,6 +253,38 @@ export function buildScreenFeatures(input: BuildScreenFeaturesInput): ScreenFeat
 
 export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   const reasons: string[] = [];
+  const rejectReasons: string[] = [];
+
+  if (features.renouncedMint !== true) {
+    rejectReasons.push("mint not renounced");
+  }
+  if (features.renouncedFreezeAccount !== true) {
+    rejectReasons.push("freeze not renounced");
+  }
+  if (features.launchpadPlatform === "pump_mayhem") {
+    rejectReasons.push("pump_mayhem platform");
+  }
+  if (features.marketCap === null || features.marketCap <= 0) {
+    rejectReasons.push("missing market cap");
+  }
+  if (features.twoCandleAvgVolume === null) {
+    rejectReasons.push("missing migration candles");
+  }
+  if (features.hideRisk === true) {
+    rejectReasons.push("gmgn hide_risk flag");
+  }
+  if (features.top10HolderRate !== null && features.top10HolderRate > 0.28) {
+    rejectReasons.push("top10 concentration too high");
+  }
+  if (features.creatorHoldRate !== null && features.creatorHoldRate > 0.07) {
+    rejectReasons.push("creator hold too high");
+  }
+  if (
+    features.topBundlerTraderPercentage !== null &&
+    features.topBundlerTraderPercentage > 0.45
+  ) {
+    rejectReasons.push("bundler concentration too high");
+  }
 
   let structureScore = 0;
   if (features.twoCandleAvgVolume !== null) {
@@ -281,6 +347,33 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   if (features.top10HolderRate !== null) {
     riskPenalty += clamp(features.top10HolderRate / 0.25, 0, 2) * 12;
   }
+  if (features.creatorHoldRate !== null) {
+    riskPenalty += clamp(features.creatorHoldRate / 0.05, 0, 2) * 10;
+  }
+  if (features.devTeamHoldRate !== null) {
+    riskPenalty += clamp(features.devTeamHoldRate / 0.05, 0, 2) * 8;
+  }
+  if (features.privateVaultHoldRate !== null) {
+    riskPenalty += clamp(features.privateVaultHoldRate / 0.05, 0, 2) * 8;
+  }
+  if (features.topBundlerTraderPercentage !== null) {
+    riskPenalty += clamp(features.topBundlerTraderPercentage / 0.35, 0, 2) * 12;
+  }
+  if (features.topEntrapmentTraderPercentage !== null) {
+    riskPenalty += clamp(features.topEntrapmentTraderPercentage / 0.12, 0, 2) * 10;
+  }
+  if (features.botDegenRate !== null) {
+    riskPenalty += clamp(features.botDegenRate / 0.2, 0, 2) * 8;
+  }
+  if (features.buyTax !== null && features.buyTax > 0) {
+    riskPenalty += clamp(features.buyTax / 10, 0, 1.5) * 10;
+  }
+  if (features.sellTax !== null && features.sellTax > 0) {
+    riskPenalty += clamp(features.sellTax / 10, 0, 1.5) * 12;
+  }
+  if (features.hideRisk === true) {
+    riskPenalty += 25;
+  }
   if (features.renouncedMint === false) {
     riskPenalty += 25;
   }
@@ -305,9 +398,14 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   if (features.top10HolderRate !== null) {
     reasons.push(`top10 ${(features.top10HolderRate * 100).toFixed(1)}%`);
   }
+  if (features.topBundlerTraderPercentage !== null) {
+    reasons.push(`bundler ${(features.topBundlerTraderPercentage * 100).toFixed(1)}%`);
+  }
 
   let verdict: ScreenScore["verdict"] = "reject";
-  if (finalScore >= 65) {
+  if (rejectReasons.length > 0) {
+    verdict = "reject";
+  } else if (finalScore >= 65) {
     verdict = "strong-structure";
   } else if (finalScore >= 45) {
     verdict = "tradeable";
@@ -325,5 +423,6 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
     finalScore,
     verdict,
     reasons,
+    rejectReasons,
   };
 }

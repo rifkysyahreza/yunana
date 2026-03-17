@@ -92,6 +92,20 @@ type GmgnTokenSecurity = {
   hide_risk?: boolean;
 };
 
+type GmgnTokenStat = {
+  holder_count?: string | number;
+  bluechip_owner_percentage?: string | number;
+  top_bundler_trader_percentage?: string | number;
+  top_entrapment_trader_percentage?: string | number;
+  bot_degen_rate?: string | number;
+  fresh_wallet_rate?: string | number;
+  top_10_holder_rate?: string | number;
+  dev_team_hold_rate?: string | number;
+  creator_hold_rate?: string | number;
+  creator_token_balance?: string | number;
+  private_vault_hold_rate?: string | number;
+};
+
 type GmgnMcapCandle = {
   time?: number;
   open?: string | number;
@@ -132,6 +146,7 @@ const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY
 const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
 const GMGN_MULTI_TOKEN_INFO_URL = "https://gmgn.ai/mrwapi/v1/multi_token_info";
 const GMGN_TOKEN_SECURITY_URL = "https://gmgn.ai/api/v1/token_security_sol/sol";
+const GMGN_TOKEN_STAT_URL = "https://gmgn.ai/api/v1/token_stat/sol";
 const GMGN_TOKEN_MCAP_CANDLES_URL =
   "https://gmgn.ai/api/v1/token_mcap_candles/sol";
 const GMGN_QUOTE_API_URL =
@@ -266,11 +281,12 @@ async function processMintCandidate(
   migratedTimestampHint?: number,
   source: "new" | "deferred" = "new",
 ): Promise<void> {
-  const [gmgn, launchpadInfo, securityInfo, quotedMarketCap] =
+  const [gmgn, launchpadInfo, securityInfo, tokenStat, quotedMarketCap] =
     await Promise.all([
       fetchGmgnTokenWithRetry(mint),
       fetchGmgnLaunchpadInfo(mint),
       fetchGmgnTokenSecurity(mint),
+      fetchGmgnTokenStat(mint),
       fetchGmgnQuoteMarketCap(mint),
     ]);
 
@@ -380,10 +396,22 @@ async function processMintCandidate(
     marketCap: latestMarketCap,
     liquidity: toNumber(gmgn?.liquidity),
     totalFee,
-    holderCount: toNumber(gmgn?.holder_count),
+    holderCount: toNumber(tokenStat?.holder_count) ?? toNumber(gmgn?.holder_count),
     top10HolderRate:
+      toNumber(tokenStat?.top_10_holder_rate) ??
       toNumber(securityInfo?.top_10_holder_rate) ??
       toNumber(gmgn?.dev?.top_10_holder_rate),
+    creatorHoldRate: toNumber(tokenStat?.creator_hold_rate),
+    devTeamHoldRate: toNumber(tokenStat?.dev_team_hold_rate),
+    privateVaultHoldRate: toNumber(tokenStat?.private_vault_hold_rate),
+    topBundlerTraderPercentage: toNumber(tokenStat?.top_bundler_trader_percentage),
+    topEntrapmentTraderPercentage: toNumber(tokenStat?.top_entrapment_trader_percentage),
+    freshWalletRate: toNumber(tokenStat?.fresh_wallet_rate),
+    bluechipOwnerPercentage: toNumber(tokenStat?.bluechip_owner_percentage),
+    botDegenRate: toNumber(tokenStat?.bot_degen_rate),
+    buyTax: toNumber(securityInfo?.buy_tax),
+    sellTax: toNumber(securityInfo?.sell_tax),
+    hideRisk: securityInfo?.hide_risk ?? null,
     renouncedMint: securityInfo?.renounced_mint ?? null,
     renouncedFreezeAccount: securityInfo?.renounced_freeze_account ?? null,
     launchpadPlatform: launchpadInfo?.launchpad_platform ?? null,
@@ -409,6 +437,12 @@ async function processMintCandidate(
     candles: migrationCandles.candles,
   });
   const score = scoreScreenFeatures(features);
+  if (score.rejectReasons.length > 0) {
+    deferredVolumeCandidates.delete(mint);
+    deferredVolumeMints.delete(mint);
+    console.log(`[skip] ${mint} hard reject: ${score.rejectReasons.join(", ")}`);
+    return;
+  }
 
   await sendTelegramAlert(
     gmgn,
@@ -577,6 +611,39 @@ async function fetchGmgnTokenSecurity(
       data?: GmgnTokenSecurity;
       code?: number;
     };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
+async function fetchGmgnTokenStat(
+  mint: string,
+): Promise<GmgnTokenStat | null> {
+  const res = await fetch(`${GMGN_TOKEN_STAT_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTokenStat; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTokenStat; code?: number };
   } catch {
     return null;
   }
@@ -770,6 +837,7 @@ async function sendTelegramAlert(
     `Verdict: <b>${escapeHtml(score.verdict.toUpperCase())}</b>`,
     `Score: <b>${score.finalScore}</b> (structure ${score.structureScore} | flow ${score.flowScore} | pool ${score.poolScore} | risk -${score.riskPenalty})`,
     `Reasons: ${escapeHtml(score.reasons.join(" | "))}`,
+    `${score.rejectReasons.length > 0 ? `Rejects: ${escapeHtml(score.rejectReasons.join(" | "))}` : ""}`,
     "",
     "<u>Token Stat</u>",
     `Total fee: ${fmtNum(totalFee)}`,
