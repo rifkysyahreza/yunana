@@ -1,0 +1,329 @@
+export type CandlePoint = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  amount: number | null;
+};
+
+export type CandleDerived = CandlePoint & {
+  range: number;
+  body: number;
+  bodyPctOfRange: number;
+  upperWickPctOfRange: number;
+  lowerWickPctOfRange: number;
+  closePositionPct: number;
+};
+
+export type ScreenFeatures = {
+  mint: string;
+  symbol: string | null;
+  name: string | null;
+  marketCap: number | null;
+  liquidity: number | null;
+  totalFee: number | null;
+  solPer10kMc: number | null;
+  holderCount: number | null;
+  top10HolderRate: number | null;
+  renouncedMint: boolean | null;
+  renouncedFreezeAccount: boolean | null;
+  launchpadPlatform: string | null;
+  hasDlmmPool: boolean;
+  hasDammV2Pool: boolean;
+  twoCandleAvgVolume: number | null;
+  threeCandleAvgVolume: number | null;
+  priceNow: number | null;
+  price1m: number | null;
+  price5m: number | null;
+  buys1m: number | null;
+  sells1m: number | null;
+  buys5m: number | null;
+  sells5m: number | null;
+  volume1m: number | null;
+  volume5m: number | null;
+  buyVolume1m: number | null;
+  sellVolume1m: number | null;
+  buyVolume5m: number | null;
+  sellVolume5m: number | null;
+  swaps1m: number | null;
+  swaps5m: number | null;
+  hotLevel: number | null;
+  visitingCount: number | null;
+  c0: CandleDerived | null;
+  c1: CandleDerived | null;
+  c2: CandleDerived | null;
+  momentum1mPct: number | null;
+  momentum5mPct: number | null;
+  buySellRatio1m: number | null;
+  buySellRatio5m: number | null;
+  buyVolumeDominance1m: number | null;
+  buyVolumeDominance5m: number | null;
+  volumePersistenceRatio: number | null;
+};
+
+export type ScreenScore = {
+  structureScore: number;
+  flowScore: number;
+  poolScore: number;
+  riskPenalty: number;
+  finalScore: number;
+  verdict: "reject" | "watch" | "tradeable" | "high-risk-momentum" | "strong-structure";
+  reasons: string[];
+};
+
+export type BuildScreenFeaturesInput = {
+  mint: string;
+  symbol?: string | null;
+  name?: string | null;
+  marketCap?: number | null;
+  liquidity?: number | null;
+  totalFee?: number | null;
+  holderCount?: number | null;
+  top10HolderRate?: number | null;
+  renouncedMint?: boolean | null;
+  renouncedFreezeAccount?: boolean | null;
+  launchpadPlatform?: string | null;
+  hasDlmmPool?: boolean;
+  hasDammV2Pool?: boolean;
+  priceNow?: number | null;
+  price1m?: number | null;
+  price5m?: number | null;
+  buys1m?: number | null;
+  sells1m?: number | null;
+  buys5m?: number | null;
+  sells5m?: number | null;
+  volume1m?: number | null;
+  volume5m?: number | null;
+  buyVolume1m?: number | null;
+  sellVolume1m?: number | null;
+  buyVolume5m?: number | null;
+  sellVolume5m?: number | null;
+  swaps1m?: number | null;
+  swaps5m?: number | null;
+  hotLevel?: number | null;
+  visitingCount?: number | null;
+  candles?: Array<CandlePoint | null | undefined>;
+};
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function pctChange(current: number | null, previous: number | null): number | null {
+  if (current === null || previous === null || previous === 0) {
+    return null;
+  }
+  return (current - previous) / previous;
+}
+
+function safeRatio(numerator: number | null, denominator: number | null): number | null {
+  if (numerator === null || denominator === null || denominator === 0) {
+    return null;
+  }
+  return numerator / denominator;
+}
+
+export function deriveCandle(point: CandlePoint | null | undefined): CandleDerived | null {
+  if (!point) {
+    return null;
+  }
+
+  const range = Math.max(point.high - point.low, 0);
+  const body = Math.abs(point.close - point.open);
+  const upperWick = Math.max(point.high - Math.max(point.open, point.close), 0);
+  const lowerWick = Math.max(Math.min(point.open, point.close) - point.low, 0);
+  const bodyPctOfRange = range > 0 ? body / range : 0;
+  const upperWickPctOfRange = range > 0 ? upperWick / range : 0;
+  const lowerWickPctOfRange = range > 0 ? lowerWick / range : 0;
+  const closePositionPct = range > 0 ? (point.close - point.low) / range : 0.5;
+
+  return {
+    ...point,
+    range,
+    body,
+    bodyPctOfRange,
+    upperWickPctOfRange,
+    lowerWickPctOfRange,
+    closePositionPct,
+  };
+}
+
+export function buildScreenFeatures(input: BuildScreenFeaturesInput): ScreenFeatures {
+  const c0 = deriveCandle(input.candles?.[0]);
+  const c1 = deriveCandle(input.candles?.[1]);
+  const c2 = deriveCandle(input.candles?.[2]);
+  const totalFee = input.totalFee ?? null;
+  const marketCap = input.marketCap ?? null;
+  const twoCandleAvgVolume =
+    c0 && c1 ? (c0.volume + c1.volume) / 2 : null;
+  const threeCandleAvgVolume =
+    c0 && c1 && c2 ? (c0.volume + c1.volume + c2.volume) / 3 : null;
+
+  return {
+    mint: input.mint,
+    symbol: input.symbol ?? null,
+    name: input.name ?? null,
+    marketCap,
+    liquidity: input.liquidity ?? null,
+    totalFee,
+    solPer10kMc:
+      totalFee !== null && marketCap !== null && totalFee > 0 && marketCap > 0
+        ? (totalFee * 10000) / marketCap
+        : null,
+    holderCount: input.holderCount ?? null,
+    top10HolderRate: input.top10HolderRate ?? null,
+    renouncedMint: input.renouncedMint ?? null,
+    renouncedFreezeAccount: input.renouncedFreezeAccount ?? null,
+    launchpadPlatform: input.launchpadPlatform ?? null,
+    hasDlmmPool: Boolean(input.hasDlmmPool),
+    hasDammV2Pool: Boolean(input.hasDammV2Pool),
+    twoCandleAvgVolume,
+    threeCandleAvgVolume,
+    priceNow: input.priceNow ?? null,
+    price1m: input.price1m ?? null,
+    price5m: input.price5m ?? null,
+    buys1m: input.buys1m ?? null,
+    sells1m: input.sells1m ?? null,
+    buys5m: input.buys5m ?? null,
+    sells5m: input.sells5m ?? null,
+    volume1m: input.volume1m ?? null,
+    volume5m: input.volume5m ?? null,
+    buyVolume1m: input.buyVolume1m ?? null,
+    sellVolume1m: input.sellVolume1m ?? null,
+    buyVolume5m: input.buyVolume5m ?? null,
+    sellVolume5m: input.sellVolume5m ?? null,
+    swaps1m: input.swaps1m ?? null,
+    swaps5m: input.swaps5m ?? null,
+    hotLevel: input.hotLevel ?? null,
+    visitingCount: input.visitingCount ?? null,
+    c0,
+    c1,
+    c2,
+    momentum1mPct: pctChange(input.priceNow ?? null, input.price1m ?? null),
+    momentum5mPct: pctChange(input.priceNow ?? null, input.price5m ?? null),
+    buySellRatio1m: safeRatio(input.buys1m ?? null, input.sells1m ?? null),
+    buySellRatio5m: safeRatio(input.buys5m ?? null, input.sells5m ?? null),
+    buyVolumeDominance1m: safeRatio(
+      input.buyVolume1m ?? null,
+      input.volume1m ?? null,
+    ),
+    buyVolumeDominance5m: safeRatio(
+      input.buyVolume5m ?? null,
+      input.volume5m ?? null,
+    ),
+    volumePersistenceRatio: c0 && c1 && c0.volume > 0 ? c1.volume / c0.volume : null,
+  };
+}
+
+export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
+  const reasons: string[] = [];
+
+  let structureScore = 0;
+  if (features.twoCandleAvgVolume !== null) {
+    structureScore += clamp(features.twoCandleAvgVolume / 25000, 0, 1.5) * 20;
+  }
+  if (features.volumePersistenceRatio !== null) {
+    structureScore += clamp(features.volumePersistenceRatio, 0, 1.25) * 12;
+  }
+  if (features.c0) {
+    structureScore += clamp(features.c0.bodyPctOfRange, 0, 1) * 10;
+    structureScore += clamp(features.c0.closePositionPct, 0, 1) * 8;
+    structureScore -= clamp(features.c0.upperWickPctOfRange, 0, 1) * 8;
+  }
+  if (features.c1) {
+    structureScore += clamp(features.c1.bodyPctOfRange, 0, 1) * 12;
+    structureScore += clamp(features.c1.closePositionPct, 0, 1) * 10;
+    structureScore -= clamp(features.c1.upperWickPctOfRange, 0, 1) * 10;
+  }
+  if (features.c2) {
+    structureScore += clamp(features.c2.closePositionPct, 0, 1) * 6;
+    structureScore -= clamp(features.c2.upperWickPctOfRange, 0, 1) * 6;
+  }
+
+  let flowScore = 0;
+  if (features.buySellRatio1m !== null) {
+    flowScore += clamp(features.buySellRatio1m / 2, 0, 1.5) * 10;
+  }
+  if (features.buySellRatio5m !== null) {
+    flowScore += clamp(features.buySellRatio5m / 2, 0, 1.5) * 8;
+  }
+  if (features.buyVolumeDominance1m !== null) {
+    flowScore += clamp(features.buyVolumeDominance1m, 0, 1) * 10;
+  }
+  if (features.buyVolumeDominance5m !== null) {
+    flowScore += clamp(features.buyVolumeDominance5m, 0, 1) * 8;
+  }
+  if (features.momentum1mPct !== null) {
+    flowScore += clamp(features.momentum1mPct * 10, -1, 1.5) * 6;
+  }
+  if (features.momentum5mPct !== null) {
+    flowScore += clamp(features.momentum5mPct * 10, -1, 1.5) * 8;
+  }
+  if (features.hotLevel !== null) {
+    flowScore += clamp(features.hotLevel / 3, 0, 1) * 4;
+  }
+
+  let poolScore = 0;
+  if (features.hasDlmmPool) {
+    poolScore += 8;
+  }
+  if (features.hasDammV2Pool) {
+    poolScore += 6;
+  }
+  if (features.marketCap !== null && features.liquidity !== null && features.marketCap > 0) {
+    const liqRatio = features.liquidity / features.marketCap;
+    poolScore += clamp(liqRatio * 10, 0, 1) * 6;
+  }
+
+  let riskPenalty = 0;
+  if (features.top10HolderRate !== null) {
+    riskPenalty += clamp(features.top10HolderRate / 0.25, 0, 2) * 12;
+  }
+  if (features.renouncedMint === false) {
+    riskPenalty += 25;
+  }
+  if (features.renouncedFreezeAccount === false) {
+    riskPenalty += 25;
+  }
+  if (features.launchpadPlatform === "pump_mayhem") {
+    riskPenalty += 30;
+  }
+  if (features.solPer10kMc !== null && (features.solPer10kMc < 0.6 || features.solPer10kMc > 1.2)) {
+    riskPenalty += 8;
+  }
+
+  const finalScore = Math.round(structureScore + flowScore + poolScore - riskPenalty);
+
+  if (features.twoCandleAvgVolume !== null) {
+    reasons.push(`2-candle avg vol ${features.twoCandleAvgVolume.toFixed(0)}`);
+  }
+  if (features.buySellRatio1m !== null) {
+    reasons.push(`buy/sell 1m ${features.buySellRatio1m.toFixed(2)}`);
+  }
+  if (features.top10HolderRate !== null) {
+    reasons.push(`top10 ${(features.top10HolderRate * 100).toFixed(1)}%`);
+  }
+
+  let verdict: ScreenScore["verdict"] = "reject";
+  if (finalScore >= 65) {
+    verdict = "strong-structure";
+  } else if (finalScore >= 45) {
+    verdict = "tradeable";
+  } else if (finalScore >= 25) {
+    verdict = "watch";
+  } else if (finalScore >= 10) {
+    verdict = "high-risk-momentum";
+  }
+
+  return {
+    structureScore: Math.round(structureScore),
+    flowScore: Math.round(flowScore),
+    poolScore: Math.round(poolScore),
+    riskPenalty: Math.round(riskPenalty),
+    finalScore,
+    verdict,
+    reasons,
+  };
+}

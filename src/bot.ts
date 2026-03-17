@@ -1,4 +1,11 @@
 import "dotenv/config";
+import {
+  buildScreenFeatures,
+  scoreScreenFeatures,
+  type CandlePoint,
+  type ScreenFeatures,
+  type ScreenScore,
+} from "./screener.js";
 
 type JsonRpcResponse<T> = {
   result?: T;
@@ -33,14 +40,39 @@ type GmgnToken = {
   symbol?: string;
   name?: string;
   banner?: string;
+  holder_count?: string | number;
+  liquidity?: string | number;
   migrated_timestamp?: number;
   total_fee?: string | number;
   market_cap?: string | number;
   marketcap?: string | number;
   fdv?: string | number;
+  price?: {
+    price?: string | number;
+    price_1m?: string | number;
+    price_5m?: string | number;
+    buys_1m?: number;
+    sells_1m?: number;
+    buys_5m?: number;
+    sells_5m?: number;
+    volume_1m?: string | number;
+    volume_5m?: string | number;
+    buy_volume_1m?: string | number;
+    sell_volume_1m?: string | number;
+    buy_volume_5m?: string | number;
+    sell_volume_5m?: string | number;
+    swaps_1m?: number;
+    swaps_5m?: number;
+    hot_level?: number;
+  };
+  visiting_count?: string | number;
   pool?: {
     exchange?: string;
     pool_address?: string;
+    fee_ratio?: string | number;
+  };
+  dev?: {
+    top_10_holder_rate?: string | number;
   };
 };
 
@@ -54,11 +86,20 @@ type GmgnTokenSecurity = {
   address: string;
   renounced_mint?: boolean;
   renounced_freeze_account?: boolean;
+  top_10_holder_rate?: string | number;
+  buy_tax?: string | number;
+  sell_tax?: string | number;
+  hide_risk?: boolean;
 };
 
 type GmgnMcapCandle = {
   time?: number;
+  open?: string | number;
+  high?: string | number;
+  low?: string | number;
+  close?: string | number;
   volume?: string | number;
+  amount?: string | number;
 };
 
 type MeteoraPool = {
@@ -277,42 +318,39 @@ async function processMintCandidate(
     return;
   }
 
-  const twoCandleVolume = await fetchTwoCandleAverageVolume(
-    mint,
-    migratedTimestamp,
-  );
-  if (twoCandleVolume.status !== "ok") {
+  const migrationCandles = await fetchMigrationCandles(mint, migratedTimestamp);
+  if (migrationCandles.status !== "ok") {
     deferredVolumeMints.add(mint);
     deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
     if (source === "new") {
       console.log(
-        `[defer] ${mint} volume gate waiting (${twoCandleVolume.reason})`,
+        `[defer] ${mint} volume gate waiting (${migrationCandles.reason})`,
       );
     }
     return;
   }
   if (deferredVolumeMints.has(mint)) {
     console.log(
-      `[resume] ${mint} volume gate ready avg=${twoCandleVolume.average.toFixed(2)}`,
+      `[resume] ${mint} volume gate ready avg=${migrationCandles.average.toFixed(2)}`,
     );
   }
-  if (twoCandleVolume.average < MIN_TWO_CANDLE_AVG_VOLUME) {
+  if (migrationCandles.average < MIN_TWO_CANDLE_AVG_VOLUME) {
     deferredVolumeCandidates.delete(mint);
     if (deferredVolumeMints.has(mint)) {
       deferredVolumeMints.delete(mint);
       console.log(
-        `[skip] ${mint} deferred token failed volume gate avg=${twoCandleVolume.average.toFixed(2)}`,
+        `[skip] ${mint} deferred token failed volume gate avg=${migrationCandles.average.toFixed(2)}`,
       );
       return;
     }
     console.log(
-      `[skip] ${mint} volume gate failed avg=${twoCandleVolume.average.toFixed(2)}`,
+      `[skip] ${mint} volume gate failed avg=${migrationCandles.average.toFixed(2)}`,
     );
     return;
   }
   if (deferredVolumeMints.has(mint)) {
     console.log(
-      `[pass] ${mint} deferred token passed volume gate avg=${twoCandleVolume.average.toFixed(2)}`,
+      `[pass] ${mint} deferred token passed volume gate avg=${migrationCandles.average.toFixed(2)}`,
     );
   }
 
@@ -334,6 +372,44 @@ async function processMintCandidate(
   ]);
   const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
   const latestMarketCap = latestQuotedMarketCap ?? marketCap;
+
+  const features = buildScreenFeatures({
+    mint,
+    symbol: gmgn?.symbol ?? null,
+    name: gmgn?.name ?? null,
+    marketCap: latestMarketCap,
+    liquidity: toNumber(gmgn?.liquidity),
+    totalFee,
+    holderCount: toNumber(gmgn?.holder_count),
+    top10HolderRate:
+      toNumber(securityInfo?.top_10_holder_rate) ??
+      toNumber(gmgn?.dev?.top_10_holder_rate),
+    renouncedMint: securityInfo?.renounced_mint ?? null,
+    renouncedFreezeAccount: securityInfo?.renounced_freeze_account ?? null,
+    launchpadPlatform: launchpadInfo?.launchpad_platform ?? null,
+    hasDlmmPool: Boolean(dlmmPool?.pool_address),
+    hasDammV2Pool: Boolean(dammV2Pool?.pool_address),
+    priceNow: toNumber(gmgn?.price?.price),
+    price1m: toNumber(gmgn?.price?.price_1m),
+    price5m: toNumber(gmgn?.price?.price_5m),
+    buys1m: gmgn?.price?.buys_1m ?? null,
+    sells1m: gmgn?.price?.sells_1m ?? null,
+    buys5m: gmgn?.price?.buys_5m ?? null,
+    sells5m: gmgn?.price?.sells_5m ?? null,
+    volume1m: toNumber(gmgn?.price?.volume_1m),
+    volume5m: toNumber(gmgn?.price?.volume_5m),
+    buyVolume1m: toNumber(gmgn?.price?.buy_volume_1m),
+    sellVolume1m: toNumber(gmgn?.price?.sell_volume_1m),
+    buyVolume5m: toNumber(gmgn?.price?.buy_volume_5m),
+    sellVolume5m: toNumber(gmgn?.price?.sell_volume_5m),
+    swaps1m: gmgn?.price?.swaps_1m ?? null,
+    swaps5m: gmgn?.price?.swaps_5m ?? null,
+    hotLevel: gmgn?.price?.hot_level ?? null,
+    visitingCount: toNumber(gmgn?.visiting_count),
+    candles: migrationCandles.candles,
+  });
+  const score = scoreScreenFeatures(features);
+
   await sendTelegramAlert(
     gmgn,
     mint,
@@ -341,8 +417,10 @@ async function processMintCandidate(
     latestMarketCap,
     dlmmPool,
     dammV2Pool,
-    twoCandleVolume.average,
+    migrationCandles.average,
     signature,
+    features,
+    score,
   );
   deferredVolumeCandidates.delete(mint);
   if (deferredVolumeMints.has(mint)) {
@@ -535,11 +613,16 @@ async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   return toNumber(json.data?.market_cap);
 }
 
-async function fetchTwoCandleAverageVolume(
+async function fetchMigrationCandles(
   mint: string,
   migratedTimestampSec: number,
 ): Promise<
-  { status: "ok"; average: number } | { status: "not_ready"; reason: string }
+  | {
+      status: "ok";
+      average: number;
+      candles: [CandlePoint, CandlePoint, CandlePoint];
+    }
+  | { status: "not_ready"; reason: string }
 > {
   const migratedCandleMs = Math.floor(migratedTimestampSec / 60) * 60 * 1000;
   const afterCandleMs = migratedCandleMs + 60_000;
@@ -585,19 +668,41 @@ async function fetchTwoCandleAverageVolume(
     return { status: "not_ready", reason: "candle_not_closed_yet" };
   }
 
-  const v0 = toNumber(candle0.volume);
-  const v1 = toNumber(candle1.volume);
-  if (v0 === null || v1 === null) {
-    return { status: "not_ready", reason: "candle_volume_missing" };
+  const parsed = [candle0, candle1, candle2].map((c) => ({
+    time: c.time as number,
+    open: toNumber(c.open),
+    high: toNumber(c.high),
+    low: toNumber(c.low),
+    close: toNumber(c.close),
+    volume: toNumber(c.volume),
+    amount: toNumber(c.amount),
+  }));
+
+  if (parsed.some((c) => c.open === null || c.high === null || c.low === null || c.close === null || c.volume === null)) {
+    return { status: "not_ready", reason: "candle_value_missing" };
   }
+
+  const normalized = parsed.map((c) => ({
+    time: c.time,
+    open: c.open as number,
+    high: c.high as number,
+    low: c.low as number,
+    close: c.close as number,
+    volume: c.volume as number,
+    amount: c.amount,
+  })) as [CandlePoint, CandlePoint, CandlePoint];
 
   if (DEBUG_CANDLE_SELECTION) {
     console.log(
-      `[candle] ${mint} migrated_ts=${migratedTimestampSec} candle0=${migratedCandleMs} vol0=${v0.toFixed(6)} candle1=${afterCandleMs} vol1=${v1.toFixed(6)} avg=${((v0 + v1) / 2).toFixed(6)}`,
+      `[candle] ${mint} migrated_ts=${migratedTimestampSec} candle0=${migratedCandleMs} vol0=${normalized[0].volume.toFixed(6)} candle1=${afterCandleMs} vol1=${normalized[1].volume.toFixed(6)} avg=${((normalized[0].volume + normalized[1].volume) / 2).toFixed(6)}`,
     );
   }
 
-  return { status: "ok", average: (v0 + v1) / 2 };
+  return {
+    status: "ok",
+    average: (normalized[0].volume + normalized[1].volume) / 2,
+    candles: normalized,
+  };
 }
 
 async function searchMeteoraPoolByType(
@@ -632,6 +737,8 @@ async function sendTelegramAlert(
   dammV2Pool: MeteoraPool | null,
   twoCandleAvgVolume: number,
   signature: string,
+  features: ScreenFeatures,
+  score: ScreenScore,
 ): Promise<void> {
   const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
   const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
@@ -659,10 +766,19 @@ async function sendTelegramAlert(
     `Token Name: ${escapeHtml(token?.name ?? "Unknown")}`,
     `Token Symbol: ${escapeHtml(token?.symbol ?? "Unknown")}`,
     "",
+    "<u>Screener Verdict</u>",
+    `Verdict: <b>${escapeHtml(score.verdict.toUpperCase())}</b>`,
+    `Score: <b>${score.finalScore}</b> (structure ${score.structureScore} | flow ${score.flowScore} | pool ${score.poolScore} | risk -${score.riskPenalty})`,
+    `Reasons: ${escapeHtml(score.reasons.join(" | "))}`,
+    "",
     "<u>Token Stat</u>",
     `Total fee: ${fmtNum(totalFee)}`,
     `Market cap: ${fmtNum(marketCap)}`,
+    `Sol/10k MC: ${features.solPer10kMc === null ? "Unknown" : features.solPer10kMc.toFixed(3)}`,
     `2x1m Avg Volume: ${fmtNum(twoCandleAvgVolume)}`,
+    `Buy/Sell 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
+    `Buy Vol Dom 1m: ${features.buyVolumeDominance1m === null ? "Unknown" : `${(features.buyVolumeDominance1m * 100).toFixed(1)}%`}`,
+    `Top10 Holder: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`}`,
     "",
     "<u>Meteora Pool</u>",
     `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
