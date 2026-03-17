@@ -9,8 +9,10 @@ import {
 } from "./screener.js";
 import {
   buildCandidateRow,
+  buildPreCandidateRow,
   logCandidateRow,
   logOutcomeRow,
+  logPreCandidateRow,
   type CandidateDatasetRow,
 } from "./dataset.js";
 
@@ -408,6 +410,33 @@ async function processPendingOutcomes(): Promise<void> {
   }
 }
 
+async function logDroppedPreCandidate(input: {
+  mint: string;
+  signature: string;
+  source: "new" | "deferred";
+  dropStage: "launchpad" | "security" | "migrated_timestamp" | "candles" | "volume_gate" | "ratio_gate" | "scored";
+  dropReason: string;
+  migratedTimestampHint?: number;
+  gmgn?: GmgnToken | null;
+  marketCap?: number | null;
+  totalFee?: number | null;
+}): Promise<void> {
+  await logPreCandidateRow(
+    buildPreCandidateRow({
+      mint: input.mint,
+      signature: input.signature,
+      source: input.source,
+      dropStage: input.dropStage,
+      dropReason: input.dropReason,
+      migratedTimestampHint: input.migratedTimestampHint ?? null,
+      symbol: input.gmgn?.symbol ?? null,
+      name: input.gmgn?.name ?? null,
+      marketCap: input.marketCap ?? null,
+      totalFee: input.totalFee ?? null,
+    }),
+  );
+}
+
 async function processMintCandidate(
   mint: string,
   signature: string,
@@ -428,6 +457,15 @@ async function processMintCandidate(
   if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
+    await logDroppedPreCandidate({
+      mint,
+      signature,
+      source,
+      dropStage: "launchpad",
+      dropReason: "launchpad_platform=pump_mayhem",
+      migratedTimestampHint,
+      gmgn,
+    });
     console.log(`[skip] ${mint} launchpad_platform=pump_mayhem`);
     return;
   }
@@ -439,6 +477,15 @@ async function processMintCandidate(
       signature,
       migratedTimestamp: migratedTimestampHint ?? 0,
     });
+    await logDroppedPreCandidate({
+      mint,
+      signature,
+      source,
+      dropStage: "security",
+      dropReason: "security data not ready",
+      migratedTimestampHint,
+      gmgn,
+    });
     console.log(`[defer] ${mint} security data not ready`);
     return;
   }
@@ -448,6 +495,19 @@ async function processMintCandidate(
   ) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
+    await logDroppedPreCandidate({
+      mint,
+      signature,
+      source,
+      dropStage: "security",
+      dropReason: `security gate failed (renounced_mint=${String(
+        securityInfo?.renounced_mint,
+      )}, renounced_freeze_account=${String(
+        securityInfo?.renounced_freeze_account,
+      )})`,
+      migratedTimestampHint,
+      gmgn,
+    });
     console.log(
       `[skip] ${mint} security gate failed (renounced_mint=${String(
         securityInfo?.renounced_mint,
@@ -465,6 +525,15 @@ async function processMintCandidate(
   if (!migratedTimestamp) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
+    await logDroppedPreCandidate({
+      mint,
+      signature,
+      source,
+      dropStage: "migrated_timestamp",
+      dropReason: "missing migrated_timestamp",
+      migratedTimestampHint,
+      gmgn,
+    });
     console.log(`[skip] ${mint} missing migrated_timestamp`);
     return;
   }
@@ -473,6 +542,15 @@ async function processMintCandidate(
   if (migrationCandles.status !== "ok") {
     deferredVolumeMints.add(mint);
     deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
+    await logDroppedPreCandidate({
+      mint,
+      signature,
+      source,
+      dropStage: "candles",
+      dropReason: migrationCandles.reason,
+      migratedTimestampHint: migratedTimestamp,
+      gmgn,
+    });
     if (source === "new") {
       console.log(
         `[defer] ${mint} volume gate waiting (${migrationCandles.reason})`,
@@ -487,6 +565,21 @@ async function processMintCandidate(
   }
   if (migrationCandles.average < MIN_TWO_CANDLE_AVG_VOLUME) {
     deferredVolumeCandidates.delete(mint);
+    await logDroppedPreCandidate({
+      mint,
+      signature,
+      source,
+      dropStage: "volume_gate",
+      dropReason: `volume gate failed avg=${migrationCandles.average.toFixed(2)}`,
+      migratedTimestampHint: migratedTimestamp,
+      gmgn,
+      totalFee: toNumber(gmgn?.total_fee),
+      marketCap:
+        quotedMarketCap ??
+        toNumber(gmgn?.market_cap) ??
+        toNumber(gmgn?.marketcap) ??
+        toNumber(gmgn?.fdv),
+    });
     if (deferredVolumeMints.has(mint)) {
       deferredVolumeMints.delete(mint);
       console.log(
@@ -514,6 +607,17 @@ async function processMintCandidate(
   if (!FORWARD_ALL_MIGRATED && !passesFeeMarketCapRatio(totalFee, marketCap)) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
+    await logDroppedPreCandidate({
+      mint,
+      signature,
+      source,
+      dropStage: "ratio_gate",
+      dropReason: "fee/market-cap ratio gate failed",
+      migratedTimestampHint: migratedTimestamp,
+      gmgn,
+      totalFee,
+      marketCap,
+    });
     return;
   }
 
