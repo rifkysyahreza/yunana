@@ -116,12 +116,14 @@ type GmgnTokenStat = {
 type GmgnTagWalletCount = {
   smart_wallets?: number;
   fresh_wallets?: number;
-  renowned_wallets?: number;
+  renowned_wallets?: number; // KOL wallets
   creator_wallets?: number;
   sniper_wallets?: number;
   rat_trader_wallets?: number;
   whale_wallets?: number;
   top_wallets?: number;
+  following_wallets?: number;
+  bundler_wallets?: number;
 };
 
 type GmgnTopBuyers = {
@@ -208,7 +210,7 @@ const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
 const GMGN_MULTI_TOKEN_INFO_URL = "https://gmgn.ai/mrwapi/v1/multi_token_info";
 const GMGN_TOKEN_SECURITY_URL = "https://gmgn.ai/api/v1/token_security_sol/sol";
 const GMGN_TOKEN_STAT_URL = "https://gmgn.ai/api/v1/token_stat/sol";
-const GMGN_TAG_WALLET_COUNT_URL = "https://gmgn.ai/defi/quotation/v1/tokens/tag_wallet_count/sol";
+const GMGN_TAG_WALLET_COUNT_URL = "https://gmgn.ai/api/v1/token_wallet_tags_stat/sol";
 const GMGN_TOP_BUYERS_URL = "https://gmgn.ai/defi/quotation/v1/tokens/top_buyers/sol";
 const GMGN_TOKEN_MCAP_CANDLES_URL =
   "https://gmgn.ai/api/v1/token_mcap_candles/sol";
