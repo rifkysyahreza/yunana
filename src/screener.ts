@@ -599,16 +599,59 @@ export function scoreScreenFeatures(
   if (features.c1 && features.c1.closePositionPct >= 0.6) {
     greenFlags.push("c1 closed strong in range");
   }
+  if (features.c1 && features.c1.closePositionPct < 0.4) {
+    redFlags.push("c1 closed weak in range");
+  }
   if (features.c1 && features.c1.upperWickPctOfRange >= 0.5) {
     redFlags.push("c1 upper wick heavy");
+  }
+  if (features.volumePersistenceRatio !== null && features.volumePersistenceRatio < 0.45) {
+    redFlags.push("volume persistence weak");
+  }
+  if (features.buySellRatio1m !== null && features.buySellRatio1m < 1.05) {
+    redFlags.push("buy/sell 1m weak");
+  }
+  if (
+    features.topBundlerTraderPercentage !== null &&
+    features.topBundlerTraderPercentage >= 0.25
+  ) {
+    redFlags.push("bundler elevated");
+  }
+  if (
+    features.top10HolderRate !== null &&
+    features.top10HolderRate >= 0.18
+  ) {
+    redFlags.push("top10 concentration elevated");
+  }
+  if (
+    features.ratTraderWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0 &&
+    features.ratTraderWallets / features.holderCount >= 0.02
+  ) {
+    redFlags.push("rat trader participation elevated");
+  }
+  if (
+    features.sniperWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0 &&
+    features.sniperWallets / features.holderCount >= 0.03
+  ) {
+    redFlags.push("sniper wallet participation elevated");
+  }
+  if (
+    !features.hasDlmmPool &&
+    !features.hasDammV2Pool
+  ) {
+    redFlags.push("no Meteora pool support");
   }
   if (
     features.topBuyersSoldCount !== null &&
     features.topBuyersHolderCount !== null &&
     features.topBuyersHolderCount > 0 &&
-    features.topBuyersSoldCount / features.topBuyersHolderCount >= 0.75
+    features.topBuyersSoldCount / features.topBuyersHolderCount >= 0.5
   ) {
-    redFlags.push("top buyers dumped heavily");
+    redFlags.push("top buyers selling heavily");
   }
   if (
     features.smartWallets !== null &&
