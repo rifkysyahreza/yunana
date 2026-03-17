@@ -106,6 +106,17 @@ type GmgnTokenStat = {
   private_vault_hold_rate?: string | number;
 };
 
+type GmgnTagWalletCount = {
+  smart_wallets?: number;
+  fresh_wallets?: number;
+  renowned_wallets?: number;
+  creator_wallets?: number;
+  sniper_wallets?: number;
+  rat_trader_wallets?: number;
+  whale_wallets?: number;
+  top_wallets?: number;
+};
+
 type GmgnTopBuyers = {
   holders?: {
     holder_count?: number;
@@ -165,6 +176,7 @@ const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
 const GMGN_MULTI_TOKEN_INFO_URL = "https://gmgn.ai/mrwapi/v1/multi_token_info";
 const GMGN_TOKEN_SECURITY_URL = "https://gmgn.ai/api/v1/token_security_sol/sol";
 const GMGN_TOKEN_STAT_URL = "https://gmgn.ai/api/v1/token_stat/sol";
+const GMGN_TAG_WALLET_COUNT_URL = "https://gmgn.ai/defi/quotation/v1/tokens/tag_wallet_count/sol";
 const GMGN_TOP_BUYERS_URL = "https://gmgn.ai/defi/quotation/v1/tokens/top_buyers/sol";
 const GMGN_TOKEN_MCAP_CANDLES_URL =
   "https://gmgn.ai/api/v1/token_mcap_candles/sol";
@@ -300,12 +312,13 @@ async function processMintCandidate(
   migratedTimestampHint?: number,
   source: "new" | "deferred" = "new",
 ): Promise<void> {
-  const [gmgn, launchpadInfo, securityInfo, tokenStat, topBuyers, quotedMarketCap] =
+  const [gmgn, launchpadInfo, securityInfo, tokenStat, tagWalletCount, topBuyers, quotedMarketCap] =
     await Promise.all([
       fetchGmgnTokenWithRetry(mint),
       fetchGmgnLaunchpadInfo(mint),
       fetchGmgnTokenSecurity(mint),
       fetchGmgnTokenStat(mint),
+      fetchGmgnTagWalletCount(mint),
       fetchGmgnTopBuyers(mint),
       fetchGmgnQuoteMarketCap(mint),
     ]);
@@ -436,6 +449,13 @@ async function processMintCandidate(
     freshWalletRate: toNumber(tokenStat?.fresh_wallet_rate),
     bluechipOwnerPercentage: toNumber(tokenStat?.bluechip_owner_percentage),
     botDegenRate: toNumber(tokenStat?.bot_degen_rate),
+    smartWallets: tagWalletCount?.smart_wallets ?? null,
+    freshWallets: tagWalletCount?.fresh_wallets ?? null,
+    renownedWallets: tagWalletCount?.renowned_wallets ?? null,
+    sniperWallets: tagWalletCount?.sniper_wallets ?? null,
+    ratTraderWallets: tagWalletCount?.rat_trader_wallets ?? null,
+    whaleWallets: tagWalletCount?.whale_wallets ?? null,
+    topWallets: tagWalletCount?.top_wallets ?? null,
     fastSniperCount,
     topBuyersHolderCount: topBuyers?.holders?.holder_count ?? null,
     topBuyersSoldCount: topBuyers?.holders?.statusNow?.sold ?? null,
@@ -687,6 +707,39 @@ async function fetchGmgnTokenStat(
   return json.data ?? null;
 }
 
+async function fetchGmgnTagWalletCount(
+  mint: string,
+): Promise<GmgnTagWalletCount | null> {
+  const res = await fetch(`${GMGN_TAG_WALLET_COUNT_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTagWalletCount; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTagWalletCount; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
 async function fetchGmgnTopBuyers(
   mint: string,
 ): Promise<GmgnTopBuyers | null> {
@@ -916,6 +969,8 @@ async function sendTelegramAlert(
     `Top10 Holder: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`}`,
     `Top Buyers Sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
     `Fast Snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
+    `Smart Wallets: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)}`,
+    `Rat Trader Wallets: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)}`,
     "",
     "<u>Meteora Pool</u>",
     `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,

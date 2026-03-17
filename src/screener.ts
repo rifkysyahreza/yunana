@@ -35,6 +35,13 @@ export type ScreenFeatures = {
   freshWalletRate: number | null;
   bluechipOwnerPercentage: number | null;
   botDegenRate: number | null;
+  smartWallets: number | null;
+  freshWallets: number | null;
+  renownedWallets: number | null;
+  sniperWallets: number | null;
+  ratTraderWallets: number | null;
+  whaleWallets: number | null;
+  topWallets: number | null;
   fastSniperCount: number | null;
   topBuyersHolderCount: number | null;
   topBuyersSoldCount: number | null;
@@ -109,6 +116,13 @@ export type BuildScreenFeaturesInput = {
   freshWalletRate?: number | null;
   bluechipOwnerPercentage?: number | null;
   botDegenRate?: number | null;
+  smartWallets?: number | null;
+  freshWallets?: number | null;
+  renownedWallets?: number | null;
+  sniperWallets?: number | null;
+  ratTraderWallets?: number | null;
+  whaleWallets?: number | null;
+  topWallets?: number | null;
   fastSniperCount?: number | null;
   topBuyersHolderCount?: number | null;
   topBuyersSoldCount?: number | null;
@@ -219,6 +233,13 @@ export function buildScreenFeatures(input: BuildScreenFeaturesInput): ScreenFeat
     freshWalletRate: input.freshWalletRate ?? null,
     bluechipOwnerPercentage: input.bluechipOwnerPercentage ?? null,
     botDegenRate: input.botDegenRate ?? null,
+    smartWallets: input.smartWallets ?? null,
+    freshWallets: input.freshWallets ?? null,
+    renownedWallets: input.renownedWallets ?? null,
+    sniperWallets: input.sniperWallets ?? null,
+    ratTraderWallets: input.ratTraderWallets ?? null,
+    whaleWallets: input.whaleWallets ?? null,
+    topWallets: input.topWallets ?? null,
     fastSniperCount: input.fastSniperCount ?? null,
     topBuyersHolderCount: input.topBuyersHolderCount ?? null,
     topBuyersSoldCount: input.topBuyersSoldCount ?? null,
@@ -294,6 +315,14 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   if (features.hideRisk === true) {
     rejectReasons.push("gmgn hide_risk flag");
   }
+  if (
+    features.ratTraderWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0 &&
+    features.ratTraderWallets / features.holderCount > 0.08
+  ) {
+    rejectReasons.push("rat trader wallet concentration too high");
+  }
   if (features.top10HolderRate !== null && features.top10HolderRate > 0.28) {
     rejectReasons.push("top10 concentration too high");
   }
@@ -359,6 +388,25 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   if (features.hotLevel !== null) {
     flowScore += clamp(features.hotLevel / 3, 0, 1) * 4;
   }
+  if (
+    features.smartWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0
+  ) {
+    flowScore +=
+      clamp(features.smartWallets / features.holderCount, 0, 0.05) * 120;
+  }
+  if (
+    features.renownedWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0
+  ) {
+    flowScore +=
+      clamp(features.renownedWallets / features.holderCount, 0, 0.05) * 80;
+  }
+  if (features.bluechipOwnerPercentage !== null) {
+    flowScore += clamp(features.bluechipOwnerPercentage, 0, 0.03) * 200;
+  }
 
   let poolScore = 0;
   if (features.hasDlmmPool) {
@@ -393,6 +441,30 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   }
   if (features.botDegenRate !== null) {
     riskPenalty += clamp(features.botDegenRate / 0.2, 0, 2) * 8;
+  }
+  if (
+    features.sniperWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0
+  ) {
+    riskPenalty +=
+      clamp(features.sniperWallets / features.holderCount, 0, 0.08) * 80;
+  }
+  if (
+    features.ratTraderWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0
+  ) {
+    riskPenalty +=
+      clamp(features.ratTraderWallets / features.holderCount, 0, 0.08) * 100;
+  }
+  if (
+    features.freshWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0
+  ) {
+    riskPenalty +=
+      clamp(features.freshWallets / features.holderCount, 0, 0.25) * 20;
   }
   if (
     features.fastSniperCount !== null &&
@@ -453,6 +525,15 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   }
   if (features.topBundlerTraderPercentage !== null) {
     reasons.push(`bundler ${(features.topBundlerTraderPercentage * 100).toFixed(1)}%`);
+  }
+  if (
+    features.smartWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0
+  ) {
+    reasons.push(
+      `smart ${(features.smartWallets / features.holderCount * 100).toFixed(1)}%`,
+    );
   }
   if (
     features.topBuyersSoldCount !== null &&
