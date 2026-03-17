@@ -31,11 +31,11 @@ npm install
 - `WATCH_ADDRESSES` (comma-separated Solana addresses to monitor)
 - Optional: `WATCH_PROGRAM_IDS` (comma-separated program IDs for stronger bonding/migration filtering)
 - Optional: `SCAN_INTERVAL_MS` (default `15000`)
-- Optional: `MIN_MC_PER_SOL_FEE` (default `10000`)
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
 - Optional: `MAX_SOL_PER_10K_MC` (default `1`)
 - Optional: `MIN_TWO_CANDLE_AVG_VOLUME` (default `18000`)
+- Optional: `PIPELINE_SUMMARY_EVERY_TICKS` (default `20`, set `0` to disable)
 - Optional: `GMGN_RETRY_COUNT` (default `5`)
 - Optional: `GMGN_RETRY_DELAY_MS` (default `2500`)
 - Optional: `GMGN_QUOTE_WALLET` (wallet id used in GMGN quotation endpoint path)
@@ -54,3 +54,5 @@ npm run dev
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
 - Tokens with `launchpad_platform = pump_mayhem` are ignored.
 - Hard security gate: token is ignored unless `renounced_mint=true` and `renounced_freeze_account=true`.
+- Pipeline logs now include stage + reason code, for example:
+  `[skip] <mint> stage=ratio reason=sol_per_10k_mc_out_of_range`
