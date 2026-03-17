@@ -13,6 +13,10 @@ export type CandidateDatasetRow = {
     symbol: string | null;
     name: string | null;
   };
+  baseline: {
+    marketCap: number | null;
+    price: number | null;
+  };
   features: ScreenFeatures;
   score: ScreenScore;
 };
@@ -25,7 +29,10 @@ export type OutcomeDatasetRow = {
   horizonMinutes: number;
   marketCapStart: number | null;
   marketCapObserved: number | null;
+  priceStart: number | null;
+  priceObserved: number | null;
   returnPct: number | null;
+  priceReturnPct: number | null;
 };
 
 const DATA_DIR = process.env.RUNTIME_DATA_DIR ?? "runtime-data";
@@ -52,6 +59,8 @@ export function buildCandidateRow(input: {
   migratedTimestamp: number;
   symbol: string | null;
   name: string | null;
+  baselineMarketCap: number | null;
+  baselinePrice: number | null;
   features: ScreenFeatures;
   score: ScreenScore;
 }): CandidateDatasetRow {
@@ -65,6 +74,10 @@ export function buildCandidateRow(input: {
     token: {
       symbol: input.symbol,
       name: input.name,
+    },
+    baseline: {
+      marketCap: input.baselineMarketCap,
+      price: input.baselinePrice,
     },
     features: input.features,
     score: input.score,

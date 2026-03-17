@@ -7,7 +7,12 @@ import {
   type ScreenScore,
   type ScreenerConfig,
 } from "./screener.js";
-import { buildCandidateRow, logCandidateRow } from "./dataset.js";
+import {
+  buildCandidateRow,
+  logCandidateRow,
+  logOutcomeRow,
+  type CandidateDatasetRow,
+} from "./dataset.js";
 
 type JsonRpcResponse<T> = {
   result?: T;
@@ -188,6 +193,15 @@ const SCREENER_CONFIG: ScreenerConfig = {
 const GMGN_RETRY_DELAY_MS = Number(process.env.GMGN_RETRY_DELAY_MS ?? "2500");
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
+const OUTCOME_HORIZONS_MINUTES = splitCsv(
+  process.env.OUTCOME_HORIZONS_MINUTES ?? "5,15,60",
+)
+  .map((v) => Number(v))
+  .filter((v) => Number.isFinite(v) && v > 0)
+  .sort((a, b) => a - b);
+const OUTCOME_POLL_INTERVAL_MS = Number(
+  process.env.OUTCOME_POLL_INTERVAL_MS ?? "60000",
+);
 
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
@@ -220,6 +234,14 @@ const deferredVolumeCandidates = new Map<
   string,
   { signature: string; migratedTimestamp: number }
 >();
+const pendingOutcomes = new Map<
+  string,
+  {
+    row: CandidateDatasetRow;
+    horizonsRemaining: number[];
+    nextCheckAt: number;
+  }
+>();
 let telegramUpdateOffset = 0;
 let telegramBotUsername = "";
 
@@ -240,6 +262,7 @@ async function main(): Promise<void> {
   await bootstrapCursors();
   void startTelegramPingListener();
   setInterval(scanTick, SCAN_INTERVAL_MS);
+  setInterval(processPendingOutcomes, OUTCOME_POLL_INTERVAL_MS);
   await scanTick();
 }
 
@@ -321,6 +344,65 @@ async function processDeferredVolumeCandidates(): Promise<void> {
       candidate.migratedTimestamp,
       "deferred",
     );
+  }
+}
+
+async function processPendingOutcomes(): Promise<void> {
+  const now = Date.now();
+  for (const [mint, pending] of pendingOutcomes.entries()) {
+    if (pending.horizonsRemaining.length === 0) {
+      pendingOutcomes.delete(mint);
+      continue;
+    }
+    if (pending.nextCheckAt > now) {
+      continue;
+    }
+
+    const horizonMinutes = pending.horizonsRemaining[0];
+    const targetTime = new Date(pending.row.loggedAt).getTime() + horizonMinutes * 60_000;
+    if (targetTime > now) {
+      pending.nextCheckAt = targetTime;
+      continue;
+    }
+
+    const [gmgn, quotedMarketCap] = await Promise.all([
+      fetchGmgnTokenWithRetry(mint),
+      fetchGmgnQuoteMarketCap(mint),
+    ]);
+    const observedMarketCap =
+      quotedMarketCap ??
+      toNumber(gmgn?.market_cap) ??
+      toNumber(gmgn?.marketcap) ??
+      toNumber(gmgn?.fdv);
+    const observedPrice = toNumber(gmgn?.price?.price);
+    const marketCapStart = pending.row.baseline.marketCap;
+    const priceStart = pending.row.baseline.price;
+
+    await logOutcomeRow({
+      kind: "outcome",
+      loggedAt: new Date().toISOString(),
+      mint,
+      observedAt: new Date().toISOString(),
+      horizonMinutes,
+      marketCapStart,
+      marketCapObserved: observedMarketCap,
+      priceStart,
+      priceObserved: observedPrice,
+      returnPct:
+        marketCapStart !== null && observedMarketCap !== null && marketCapStart > 0
+          ? (observedMarketCap - marketCapStart) / marketCapStart
+          : null,
+      priceReturnPct:
+        priceStart !== null && observedPrice !== null && priceStart > 0
+          ? (observedPrice - priceStart) / priceStart
+          : null,
+    });
+
+    pending.horizonsRemaining.shift();
+    pending.nextCheckAt = now + OUTCOME_POLL_INTERVAL_MS;
+    if (pending.horizonsRemaining.length === 0) {
+      pendingOutcomes.delete(mint);
+    }
   }
 }
 
@@ -509,18 +591,26 @@ async function processMintCandidate(
     candles: migrationCandles.candles,
   });
   const score = scoreScreenFeatures(features, SCREENER_CONFIG);
-  await logCandidateRow(
-    buildCandidateRow({
-      mint,
-      signature,
-      source,
-      migratedTimestamp,
-      symbol: gmgn?.symbol ?? null,
-      name: gmgn?.name ?? null,
-      features,
-      score,
-    }),
-  );
+  const candidateRow = buildCandidateRow({
+    mint,
+    signature,
+    source,
+    migratedTimestamp,
+    symbol: gmgn?.symbol ?? null,
+    name: gmgn?.name ?? null,
+    baselineMarketCap: latestMarketCap,
+    baselinePrice: toNumber(gmgn?.price?.price),
+    features,
+    score,
+  });
+  await logCandidateRow(candidateRow);
+  if (!pendingOutcomes.has(mint)) {
+    pendingOutcomes.set(mint, {
+      row: candidateRow,
+      horizonsRemaining: [...OUTCOME_HORIZONS_MINUTES],
+      nextCheckAt: Date.now() + OUTCOME_POLL_INTERVAL_MS,
+    });
+  }
 
   if (score.rejectReasons.length > 0) {
     deferredVolumeCandidates.delete(mint);
