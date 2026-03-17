@@ -97,6 +97,25 @@ export type ScreenScore = {
   verdict: "reject" | "watch" | "tradeable" | "high-risk-momentum" | "strong-structure";
   reasons: string[];
   rejectReasons: string[];
+  greenFlags: string[];
+  redFlags: string[];
+};
+
+export type ScreenerConfig = {
+  minTwoCandleAvgVolume: number;
+  minSolPer10kMc: number;
+  maxSolPer10kMc: number;
+  maxTop10HolderRate: number;
+  maxCreatorHoldRate: number;
+  maxBundlerRate: number;
+  maxRatTraderRatio: number;
+  maxTopBuyerSoldRatio: number;
+  maxBuyTax: number;
+  maxSellTax: number;
+  strongScoreThreshold: number;
+  tradeableScoreThreshold: number;
+  watchScoreThreshold: number;
+  highRiskScoreThreshold: number;
 };
 
 export type BuildScreenFeaturesInput = {
@@ -293,9 +312,14 @@ export function buildScreenFeatures(input: BuildScreenFeaturesInput): ScreenFeat
   };
 }
 
-export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
+export function scoreScreenFeatures(
+  features: ScreenFeatures,
+  config: ScreenerConfig,
+): ScreenScore {
   const reasons: string[] = [];
   const rejectReasons: string[] = [];
+  const greenFlags: string[] = [];
+  const redFlags: string[] = [];
 
   if (features.renouncedMint !== true) {
     rejectReasons.push("mint not renounced");
@@ -311,6 +335,8 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   }
   if (features.twoCandleAvgVolume === null) {
     rejectReasons.push("missing migration candles");
+  } else if (features.twoCandleAvgVolume < config.minTwoCandleAvgVolume) {
+    rejectReasons.push("2-candle avg volume below threshold");
   }
   if (features.hideRisk === true) {
     rejectReasons.push("gmgn hide_risk flag");
@@ -319,27 +345,33 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
     features.ratTraderWallets !== null &&
     features.holderCount !== null &&
     features.holderCount > 0 &&
-    features.ratTraderWallets / features.holderCount > 0.08
+    features.ratTraderWallets / features.holderCount > config.maxRatTraderRatio
   ) {
     rejectReasons.push("rat trader wallet concentration too high");
   }
-  if (features.top10HolderRate !== null && features.top10HolderRate > 0.28) {
+  if (
+    features.top10HolderRate !== null &&
+    features.top10HolderRate > config.maxTop10HolderRate
+  ) {
     rejectReasons.push("top10 concentration too high");
   }
-  if (features.creatorHoldRate !== null && features.creatorHoldRate > 0.07) {
+  if (
+    features.creatorHoldRate !== null &&
+    features.creatorHoldRate > config.maxCreatorHoldRate
+  ) {
     rejectReasons.push("creator hold too high");
   }
   if (
     features.topBuyersHolderCount !== null &&
     features.topBuyersSoldCount !== null &&
     features.topBuyersHolderCount > 0 &&
-    features.topBuyersSoldCount / features.topBuyersHolderCount > 0.9
+    features.topBuyersSoldCount / features.topBuyersHolderCount > config.maxTopBuyerSoldRatio
   ) {
     rejectReasons.push("top buyers mostly fully sold");
   }
   if (
     features.topBundlerTraderPercentage !== null &&
-    features.topBundlerTraderPercentage > 0.45
+    features.topBundlerTraderPercentage > config.maxBundlerRate
   ) {
     rejectReasons.push("bundler concentration too high");
   }
@@ -492,12 +524,27 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   }
   if (features.buyTax !== null && features.buyTax > 0) {
     riskPenalty += clamp(features.buyTax / 10, 0, 1.5) * 10;
+    if (features.buyTax > config.maxBuyTax) {
+      rejectReasons.push("buy tax above threshold");
+    }
   }
   if (features.sellTax !== null && features.sellTax > 0) {
     riskPenalty += clamp(features.sellTax / 10, 0, 1.5) * 12;
+    if (features.sellTax > config.maxSellTax) {
+      rejectReasons.push("sell tax above threshold");
+    }
   }
   if (features.hideRisk === true) {
     riskPenalty += 25;
+  }
+  if (
+    features.solPer10kMc !== null &&
+    (features.solPer10kMc < config.minSolPer10kMc ||
+      features.solPer10kMc > config.maxSolPer10kMc)
+  ) {
+    redFlags.push(`fee/mcap ratio ${features.solPer10kMc.toFixed(3)} outside preferred range`);
+  } else if (features.solPer10kMc !== null) {
+    greenFlags.push(`fee/mcap ratio ${features.solPer10kMc.toFixed(3)} in range`);
   }
   if (features.renouncedMint === false) {
     riskPenalty += 25;
@@ -508,7 +555,11 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   if (features.launchpadPlatform === "pump_mayhem") {
     riskPenalty += 30;
   }
-  if (features.solPer10kMc !== null && (features.solPer10kMc < 0.6 || features.solPer10kMc > 1.2)) {
+  if (
+    features.solPer10kMc !== null &&
+    (features.solPer10kMc < config.minSolPer10kMc ||
+      features.solPer10kMc > config.maxSolPer10kMc)
+  ) {
     riskPenalty += 8;
   }
 
@@ -545,16 +596,39 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
     );
   }
 
+  if (features.c1 && features.c1.closePositionPct >= 0.6) {
+    greenFlags.push("c1 closed strong in range");
+  }
+  if (features.c1 && features.c1.upperWickPctOfRange >= 0.5) {
+    redFlags.push("c1 upper wick heavy");
+  }
+  if (
+    features.topBuyersSoldCount !== null &&
+    features.topBuyersHolderCount !== null &&
+    features.topBuyersHolderCount > 0 &&
+    features.topBuyersSoldCount / features.topBuyersHolderCount >= 0.75
+  ) {
+    redFlags.push("top buyers dumped heavily");
+  }
+  if (
+    features.smartWallets !== null &&
+    features.holderCount !== null &&
+    features.holderCount > 0 &&
+    features.smartWallets / features.holderCount >= 0.01
+  ) {
+    greenFlags.push("smart wallet participation present");
+  }
+
   let verdict: ScreenScore["verdict"] = "reject";
   if (rejectReasons.length > 0) {
     verdict = "reject";
-  } else if (finalScore >= 65) {
+  } else if (finalScore >= config.strongScoreThreshold) {
     verdict = "strong-structure";
-  } else if (finalScore >= 45) {
+  } else if (finalScore >= config.tradeableScoreThreshold) {
     verdict = "tradeable";
-  } else if (finalScore >= 25) {
+  } else if (finalScore >= config.watchScoreThreshold) {
     verdict = "watch";
-  } else if (finalScore >= 10) {
+  } else if (finalScore >= config.highRiskScoreThreshold) {
     verdict = "high-risk-momentum";
   }
 
@@ -567,5 +641,7 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
     verdict,
     reasons,
     rejectReasons,
+    greenFlags,
+    redFlags,
   };
 }

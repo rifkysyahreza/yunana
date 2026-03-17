@@ -5,6 +5,7 @@ import {
   type CandlePoint,
   type ScreenFeatures,
   type ScreenScore,
+  type ScreenerConfig,
 } from "./screener.js";
 
 type JsonRpcResponse<T> = {
@@ -167,6 +168,22 @@ const MIN_TWO_CANDLE_AVG_VOLUME = Number(
 const DEBUG_CANDLE_SELECTION =
   (process.env.DEBUG_CANDLE_SELECTION ?? "false").toLowerCase() === "true";
 const GMGN_RETRY_COUNT = Number(process.env.GMGN_RETRY_COUNT ?? "5");
+const SCREENER_CONFIG: ScreenerConfig = {
+  minTwoCandleAvgVolume: Number(process.env.MIN_TWO_CANDLE_AVG_VOLUME ?? "18000"),
+  minSolPer10kMc: Number(process.env.MIN_SOL_PER_10K_MC ?? "0.8"),
+  maxSolPer10kMc: Number(process.env.MAX_SOL_PER_10K_MC ?? "1"),
+  maxTop10HolderRate: Number(process.env.MAX_TOP10_HOLDER_RATE ?? "0.28"),
+  maxCreatorHoldRate: Number(process.env.MAX_CREATOR_HOLD_RATE ?? "0.07"),
+  maxBundlerRate: Number(process.env.MAX_BUNDLER_RATE ?? "0.45"),
+  maxRatTraderRatio: Number(process.env.MAX_RAT_TRADER_RATIO ?? "0.08"),
+  maxTopBuyerSoldRatio: Number(process.env.MAX_TOP_BUYER_SOLD_RATIO ?? "0.9"),
+  maxBuyTax: Number(process.env.MAX_BUY_TAX ?? "0"),
+  maxSellTax: Number(process.env.MAX_SELL_TAX ?? "0"),
+  strongScoreThreshold: Number(process.env.STRONG_SCORE_THRESHOLD ?? "65"),
+  tradeableScoreThreshold: Number(process.env.TRADEABLE_SCORE_THRESHOLD ?? "45"),
+  watchScoreThreshold: Number(process.env.WATCH_SCORE_THRESHOLD ?? "25"),
+  highRiskScoreThreshold: Number(process.env.HIGH_RISK_SCORE_THRESHOLD ?? "10"),
+};
 const GMGN_RETRY_DELAY_MS = Number(process.env.GMGN_RETRY_DELAY_MS ?? "2500");
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
@@ -490,7 +507,7 @@ async function processMintCandidate(
     visitingCount: toNumber(gmgn?.visiting_count),
     candles: migrationCandles.candles,
   });
-  const score = scoreScreenFeatures(features);
+  const score = scoreScreenFeatures(features, SCREENER_CONFIG);
   if (score.rejectReasons.length > 0) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
@@ -947,36 +964,28 @@ async function sendTelegramAlert(
     quickActions.push(`<a href="${dammV2Link}">Meteora DAMMV2</a>`);
   }
 
+  const compactReasons = score.reasons.slice(0, 4).join(" | ") || "n/a";
+  const greenFlags = score.greenFlags.slice(0, 3).join(" | ") || "n/a";
+  const redFlags = score.redFlags.slice(0, 3).join(" | ") || "n/a";
+
   const text = [
-    "<u>Token Details</u>",
-    `CA: <code>${escapeHtml(mint)}</code>`,
-    `Token Name: ${escapeHtml(token?.name ?? "Unknown")}`,
-    `Token Symbol: ${escapeHtml(token?.symbol ?? "Unknown")}`,
+    `<b>${escapeHtml(score.verdict.toUpperCase())}</b> · <b>${score.finalScore}</b>`,
+    `${escapeHtml(token?.symbol ?? "Unknown")} — <code>${escapeHtml(mint)}</code>`,
     "",
-    "<u>Screener Verdict</u>",
-    `Verdict: <b>${escapeHtml(score.verdict.toUpperCase())}</b>`,
-    `Score: <b>${score.finalScore}</b> (structure ${score.structureScore} | flow ${score.flowScore} | pool ${score.poolScore} | risk -${score.riskPenalty})`,
-    `Reasons: ${escapeHtml(score.reasons.join(" | "))}`,
-    `${score.rejectReasons.length > 0 ? `Rejects: ${escapeHtml(score.rejectReasons.join(" | "))}` : ""}`,
+    `<b>Why:</b> ${escapeHtml(compactReasons)}`,
+    `<b>Green:</b> ${escapeHtml(greenFlags)}`,
+    `<b>Red:</b> ${escapeHtml(redFlags)}`,
     "",
-    "<u>Token Stat</u>",
-    `Total fee: ${fmtNum(totalFee)}`,
-    `Market cap: ${fmtNum(marketCap)}`,
-    `Sol/10k MC: ${features.solPer10kMc === null ? "Unknown" : features.solPer10kMc.toFixed(3)}`,
-    `2x1m Avg Volume: ${fmtNum(twoCandleAvgVolume)}`,
-    `Buy/Sell 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
-    `Buy Vol Dom 1m: ${features.buyVolumeDominance1m === null ? "Unknown" : `${(features.buyVolumeDominance1m * 100).toFixed(1)}%`}`,
-    `Top10 Holder: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`}`,
-    `Top Buyers Sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
-    `Fast Snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
-    `Smart Wallets: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)}`,
-    `Rat Trader Wallets: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)}`,
+    `<b>Stats</b>`,
+    `MC: ${fmtNum(marketCap)} | Fee: ${fmtNum(totalFee)} | Ratio: ${features.solPer10kMc === null ? "Unknown" : features.solPer10kMc.toFixed(3)}`,
+    `2C Avg Vol: ${fmtNum(twoCandleAvgVolume)} | B/S 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
+    `Top10: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`} | Top buyers sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
+    `Smart: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)} | Rat: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)} | Fast snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
     "",
-    "<u>Meteora Pool</u>",
-    `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
-    `DAMMV2 Pool: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
+    `<b>Pools</b> DLMM: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
+    `DAMMV2: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
     "",
-    "<u>Quick Action</u>",
+    `<b>Links</b>`,
     ...quickActions,
   ].join("\n");
 
