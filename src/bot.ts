@@ -106,6 +106,24 @@ type GmgnTokenStat = {
   private_vault_hold_rate?: string | number;
 };
 
+type GmgnTopBuyers = {
+  holders?: {
+    holder_count?: number;
+    statusNow?: {
+      hold?: number;
+      bought_more?: number;
+      sold_part?: number;
+      sold?: number;
+      transfered?: number;
+      bought_rate?: string | number;
+      holding_rate?: string | number;
+    };
+    holderInfo?: Array<{
+      is_fast_sniper?: number;
+    }>;
+  };
+};
+
 type GmgnMcapCandle = {
   time?: number;
   open?: string | number;
@@ -147,6 +165,7 @@ const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
 const GMGN_MULTI_TOKEN_INFO_URL = "https://gmgn.ai/mrwapi/v1/multi_token_info";
 const GMGN_TOKEN_SECURITY_URL = "https://gmgn.ai/api/v1/token_security_sol/sol";
 const GMGN_TOKEN_STAT_URL = "https://gmgn.ai/api/v1/token_stat/sol";
+const GMGN_TOP_BUYERS_URL = "https://gmgn.ai/defi/quotation/v1/tokens/top_buyers/sol";
 const GMGN_TOKEN_MCAP_CANDLES_URL =
   "https://gmgn.ai/api/v1/token_mcap_candles/sol";
 const GMGN_QUOTE_API_URL =
@@ -281,12 +300,13 @@ async function processMintCandidate(
   migratedTimestampHint?: number,
   source: "new" | "deferred" = "new",
 ): Promise<void> {
-  const [gmgn, launchpadInfo, securityInfo, tokenStat, quotedMarketCap] =
+  const [gmgn, launchpadInfo, securityInfo, tokenStat, topBuyers, quotedMarketCap] =
     await Promise.all([
       fetchGmgnTokenWithRetry(mint),
       fetchGmgnLaunchpadInfo(mint),
       fetchGmgnTokenSecurity(mint),
       fetchGmgnTokenStat(mint),
+      fetchGmgnTopBuyers(mint),
       fetchGmgnQuoteMarketCap(mint),
     ]);
 
@@ -389,6 +409,13 @@ async function processMintCandidate(
   const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
   const latestMarketCap = latestQuotedMarketCap ?? marketCap;
 
+  const topBuyersHolderInfo = Array.isArray(topBuyers?.holders?.holderInfo)
+    ? topBuyers.holders.holderInfo
+    : [];
+  const fastSniperCount = topBuyersHolderInfo.filter(
+    (h) => h.is_fast_sniper === 1,
+  ).length;
+
   const features = buildScreenFeatures({
     mint,
     symbol: gmgn?.symbol ?? null,
@@ -409,6 +436,13 @@ async function processMintCandidate(
     freshWalletRate: toNumber(tokenStat?.fresh_wallet_rate),
     bluechipOwnerPercentage: toNumber(tokenStat?.bluechip_owner_percentage),
     botDegenRate: toNumber(tokenStat?.bot_degen_rate),
+    fastSniperCount,
+    topBuyersHolderCount: topBuyers?.holders?.holder_count ?? null,
+    topBuyersSoldCount: topBuyers?.holders?.statusNow?.sold ?? null,
+    topBuyersSoldPartCount: topBuyers?.holders?.statusNow?.sold_part ?? null,
+    topBuyersHoldCount: topBuyers?.holders?.statusNow?.hold ?? null,
+    topBuyersHoldingRate: toNumber(topBuyers?.holders?.statusNow?.holding_rate),
+    topBuyersBoughtRate: toNumber(topBuyers?.holders?.statusNow?.bought_rate),
     buyTax: toNumber(securityInfo?.buy_tax),
     sellTax: toNumber(securityInfo?.sell_tax),
     hideRisk: securityInfo?.hide_risk ?? null,
@@ -653,6 +687,39 @@ async function fetchGmgnTokenStat(
   return json.data ?? null;
 }
 
+async function fetchGmgnTopBuyers(
+  mint: string,
+): Promise<GmgnTopBuyers | null> {
+  const res = await fetch(`${GMGN_TOP_BUYERS_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTopBuyers; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTopBuyers; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
 async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   const url = new URL(`${GMGN_QUOTE_API_URL}/${GMGN_QUOTE_WALLET}`);
   url.searchParams.set("token_address", mint);
@@ -847,6 +914,8 @@ async function sendTelegramAlert(
     `Buy/Sell 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
     `Buy Vol Dom 1m: ${features.buyVolumeDominance1m === null ? "Unknown" : `${(features.buyVolumeDominance1m * 100).toFixed(1)}%`}`,
     `Top10 Holder: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`}`,
+    `Top Buyers Sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
+    `Fast Snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
     "",
     "<u>Meteora Pool</u>",
     `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,

@@ -35,6 +35,13 @@ export type ScreenFeatures = {
   freshWalletRate: number | null;
   bluechipOwnerPercentage: number | null;
   botDegenRate: number | null;
+  fastSniperCount: number | null;
+  topBuyersHolderCount: number | null;
+  topBuyersSoldCount: number | null;
+  topBuyersSoldPartCount: number | null;
+  topBuyersHoldCount: number | null;
+  topBuyersHoldingRate: number | null;
+  topBuyersBoughtRate: number | null;
   buyTax: number | null;
   sellTax: number | null;
   hideRisk: boolean | null;
@@ -102,6 +109,13 @@ export type BuildScreenFeaturesInput = {
   freshWalletRate?: number | null;
   bluechipOwnerPercentage?: number | null;
   botDegenRate?: number | null;
+  fastSniperCount?: number | null;
+  topBuyersHolderCount?: number | null;
+  topBuyersSoldCount?: number | null;
+  topBuyersSoldPartCount?: number | null;
+  topBuyersHoldCount?: number | null;
+  topBuyersHoldingRate?: number | null;
+  topBuyersBoughtRate?: number | null;
   buyTax?: number | null;
   sellTax?: number | null;
   hideRisk?: boolean | null;
@@ -205,6 +219,13 @@ export function buildScreenFeatures(input: BuildScreenFeaturesInput): ScreenFeat
     freshWalletRate: input.freshWalletRate ?? null,
     bluechipOwnerPercentage: input.bluechipOwnerPercentage ?? null,
     botDegenRate: input.botDegenRate ?? null,
+    fastSniperCount: input.fastSniperCount ?? null,
+    topBuyersHolderCount: input.topBuyersHolderCount ?? null,
+    topBuyersSoldCount: input.topBuyersSoldCount ?? null,
+    topBuyersSoldPartCount: input.topBuyersSoldPartCount ?? null,
+    topBuyersHoldCount: input.topBuyersHoldCount ?? null,
+    topBuyersHoldingRate: input.topBuyersHoldingRate ?? null,
+    topBuyersBoughtRate: input.topBuyersBoughtRate ?? null,
     buyTax: input.buyTax ?? null,
     sellTax: input.sellTax ?? null,
     hideRisk: input.hideRisk ?? null,
@@ -278,6 +299,14 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   }
   if (features.creatorHoldRate !== null && features.creatorHoldRate > 0.07) {
     rejectReasons.push("creator hold too high");
+  }
+  if (
+    features.topBuyersHolderCount !== null &&
+    features.topBuyersSoldCount !== null &&
+    features.topBuyersHolderCount > 0 &&
+    features.topBuyersSoldCount / features.topBuyersHolderCount > 0.9
+  ) {
+    rejectReasons.push("top buyers mostly fully sold");
   }
   if (
     features.topBundlerTraderPercentage !== null &&
@@ -365,6 +394,30 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   if (features.botDegenRate !== null) {
     riskPenalty += clamp(features.botDegenRate / 0.2, 0, 2) * 8;
   }
+  if (
+    features.fastSniperCount !== null &&
+    features.topBuyersHolderCount !== null &&
+    features.topBuyersHolderCount > 0
+  ) {
+    riskPenalty +=
+      clamp(features.fastSniperCount / features.topBuyersHolderCount, 0, 0.5) * 20;
+  }
+  if (
+    features.topBuyersSoldCount !== null &&
+    features.topBuyersHolderCount !== null &&
+    features.topBuyersHolderCount > 0
+  ) {
+    riskPenalty +=
+      clamp(features.topBuyersSoldCount / features.topBuyersHolderCount, 0, 1) * 10;
+  }
+  if (
+    features.topBuyersSoldPartCount !== null &&
+    features.topBuyersHolderCount !== null &&
+    features.topBuyersHolderCount > 0
+  ) {
+    riskPenalty +=
+      clamp(features.topBuyersSoldPartCount / features.topBuyersHolderCount, 0, 1) * 6;
+  }
   if (features.buyTax !== null && features.buyTax > 0) {
     riskPenalty += clamp(features.buyTax / 10, 0, 1.5) * 10;
   }
@@ -400,6 +453,15 @@ export function scoreScreenFeatures(features: ScreenFeatures): ScreenScore {
   }
   if (features.topBundlerTraderPercentage !== null) {
     reasons.push(`bundler ${(features.topBundlerTraderPercentage * 100).toFixed(1)}%`);
+  }
+  if (
+    features.topBuyersSoldCount !== null &&
+    features.topBuyersHolderCount !== null &&
+    features.topBuyersHolderCount > 0
+  ) {
+    reasons.push(
+      `top-buyers sold ${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%`,
+    );
   }
 
   let verdict: ScreenScore["verdict"] = "reject";
