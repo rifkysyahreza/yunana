@@ -7,6 +7,7 @@ import {
   type ScreenScore,
   type ScreenerConfig,
 } from "./screener.js";
+import { buildCandidateRow, logCandidateRow } from "./dataset.js";
 
 type JsonRpcResponse<T> = {
   result?: T;
@@ -508,6 +509,19 @@ async function processMintCandidate(
     candles: migrationCandles.candles,
   });
   const score = scoreScreenFeatures(features, SCREENER_CONFIG);
+  await logCandidateRow(
+    buildCandidateRow({
+      mint,
+      signature,
+      source,
+      migratedTimestamp,
+      symbol: gmgn?.symbol ?? null,
+      name: gmgn?.name ?? null,
+      features,
+      score,
+    }),
+  );
+
   if (score.rejectReasons.length > 0) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
