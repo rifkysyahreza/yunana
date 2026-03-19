@@ -246,6 +246,7 @@ const pendingOutcomes = new Map<
     nextCheckAt: number;
   }
 >();
+const loggedPreCandidateDrops = new Set<string>();
 let telegramUpdateOffset = 0;
 let telegramBotUsername = "";
 
@@ -421,6 +422,17 @@ async function logDroppedPreCandidate(input: {
   marketCap?: number | null;
   totalFee?: number | null;
 }): Promise<void> {
+  const dedupeKey = [
+    input.mint,
+    input.signature,
+    input.dropStage,
+    input.dropReason,
+  ].join(":");
+  if (loggedPreCandidateDrops.has(dedupeKey)) {
+    return;
+  }
+  loggedPreCandidateDrops.add(dedupeKey);
+
   await logPreCandidateRow(
     buildPreCandidateRow({
       mint: input.mint,
