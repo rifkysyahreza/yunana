@@ -1,4 +1,12 @@
 import "dotenv/config";
+import {
+  buildScreenFeatures,
+  scoreScreenFeatures,
+  type CandlePoint,
+  type ScreenFeatures,
+  type ScreenScore,
+  type ScreenerConfig,
+} from "./screener.js";
 
 type JsonRpcResponse<T> = {
   result?: T;
@@ -33,14 +41,39 @@ type GmgnToken = {
   symbol?: string;
   name?: string;
   banner?: string;
+  holder_count?: string | number;
+  liquidity?: string | number;
   migrated_timestamp?: number;
   total_fee?: string | number;
   market_cap?: string | number;
   marketcap?: string | number;
   fdv?: string | number;
+  price?: {
+    price?: string | number;
+    price_1m?: string | number;
+    price_5m?: string | number;
+    buys_1m?: number;
+    sells_1m?: number;
+    buys_5m?: number;
+    sells_5m?: number;
+    volume_1m?: string | number;
+    volume_5m?: string | number;
+    buy_volume_1m?: string | number;
+    sell_volume_1m?: string | number;
+    buy_volume_5m?: string | number;
+    sell_volume_5m?: string | number;
+    swaps_1m?: number;
+    swaps_5m?: number;
+    hot_level?: number;
+  };
+  visiting_count?: string | number;
   pool?: {
     exchange?: string;
     pool_address?: string;
+    fee_ratio?: string | number;
+  };
+  dev?: {
+    top_10_holder_rate?: string | number;
   };
 };
 
@@ -54,11 +87,65 @@ type GmgnTokenSecurity = {
   address: string;
   renounced_mint?: boolean;
   renounced_freeze_account?: boolean;
+  top_10_holder_rate?: string | number;
+  buy_tax?: string | number;
+  sell_tax?: string | number;
+  hide_risk?: boolean;
+};
+
+type GmgnTokenStat = {
+  holder_count?: string | number;
+  bluechip_owner_percentage?: string | number;
+  top_bundler_trader_percentage?: string | number;
+  top_entrapment_trader_percentage?: string | number;
+  bot_degen_rate?: string | number;
+  fresh_wallet_rate?: string | number;
+  top_10_holder_rate?: string | number;
+  dev_team_hold_rate?: string | number;
+  creator_hold_rate?: string | number;
+  creator_token_balance?: string | number;
+  private_vault_hold_rate?: string | number;
+};
+
+type GmgnTagWalletCount = {
+  smart_wallets?: number;
+  fresh_wallets?: number;
+  renowned_wallets?: number; // KOL wallets
+  creator_wallets?: number;
+  sniper_wallets?: number;
+  rat_trader_wallets?: number;
+  whale_wallets?: number;
+  top_wallets?: number;
+  following_wallets?: number;
+  bundler_wallets?: number;
+};
+
+type GmgnTopBuyers = {
+  holders?: {
+    holder_count?: number;
+    statusNow?: {
+      hold?: number;
+      bought_more?: number;
+      sold_part?: number;
+      sold?: number;
+      transfered?: number;
+      bought_rate?: string | number;
+      holding_rate?: string | number;
+    };
+    holderInfo?: Array<{
+      is_fast_sniper?: number;
+    }>;
+  };
 };
 
 type GmgnMcapCandle = {
   time?: number;
+  open?: string | number;
+  high?: string | number;
+  low?: string | number;
+  close?: string | number;
   volume?: string | number;
+  amount?: string | number;
 };
 
 type MeteoraPool = {
@@ -88,6 +175,22 @@ const PIPELINE_SUMMARY_EVERY_TICKS = Number(
 const DEBUG_CANDLE_SELECTION =
   (process.env.DEBUG_CANDLE_SELECTION ?? "false").toLowerCase() === "true";
 const GMGN_RETRY_COUNT = Number(process.env.GMGN_RETRY_COUNT ?? "5");
+const SCREENER_CONFIG: ScreenerConfig = {
+  minTwoCandleAvgVolume: Number(process.env.MIN_TWO_CANDLE_AVG_VOLUME ?? "18000"),
+  minSolPer10kMc: Number(process.env.MIN_SOL_PER_10K_MC ?? "0.8"),
+  maxSolPer10kMc: Number(process.env.MAX_SOL_PER_10K_MC ?? "1"),
+  maxTop10HolderRate: Number(process.env.MAX_TOP10_HOLDER_RATE ?? "0.28"),
+  maxCreatorHoldRate: Number(process.env.MAX_CREATOR_HOLD_RATE ?? "0.07"),
+  maxBundlerRate: Number(process.env.MAX_BUNDLER_RATE ?? "0.45"),
+  maxRatTraderRatio: Number(process.env.MAX_RAT_TRADER_RATIO ?? "0.08"),
+  maxTopBuyerSoldRatio: Number(process.env.MAX_TOP_BUYER_SOLD_RATIO ?? "0.9"),
+  maxBuyTax: Number(process.env.MAX_BUY_TAX ?? "0"),
+  maxSellTax: Number(process.env.MAX_SELL_TAX ?? "0"),
+  strongScoreThreshold: Number(process.env.STRONG_SCORE_THRESHOLD ?? "65"),
+  tradeableScoreThreshold: Number(process.env.TRADEABLE_SCORE_THRESHOLD ?? "45"),
+  watchScoreThreshold: Number(process.env.WATCH_SCORE_THRESHOLD ?? "25"),
+  highRiskScoreThreshold: Number(process.env.HIGH_RISK_SCORE_THRESHOLD ?? "10"),
+};
 const GMGN_RETRY_DELAY_MS = Number(process.env.GMGN_RETRY_DELAY_MS ?? "2500");
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
@@ -96,6 +199,9 @@ const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY
 const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
 const GMGN_MULTI_TOKEN_INFO_URL = "https://gmgn.ai/mrwapi/v1/multi_token_info";
 const GMGN_TOKEN_SECURITY_URL = "https://gmgn.ai/api/v1/token_security_sol/sol";
+const GMGN_TOKEN_STAT_URL = "https://gmgn.ai/api/v1/token_stat/sol";
+const GMGN_TAG_WALLET_COUNT_URL = "https://gmgn.ai/api/v1/token_wallet_tags_stat/sol";
+const GMGN_TOP_BUYERS_URL = "https://gmgn.ai/defi/quotation/v1/tokens/top_buyers/sol";
 const GMGN_TOKEN_MCAP_CANDLES_URL =
   "https://gmgn.ai/api/v1/token_mcap_candles/sol";
 const GMGN_QUOTE_API_URL =
@@ -253,6 +359,9 @@ async function processMintCandidate(
       fetchGmgnTokenWithRetry(mint),
       fetchGmgnLaunchpadInfo(mint),
       fetchGmgnTokenSecurity(mint),
+      fetchGmgnTokenStat(mint),
+      fetchGmgnTagWalletCount(mint),
+      fetchGmgnTopBuyers(mint),
       fetchGmgnQuoteMarketCap(mint),
     ]);
 
@@ -300,11 +409,8 @@ async function processMintCandidate(
     return;
   }
 
-  const twoCandleVolume = await fetchTwoCandleAverageVolume(
-    mint,
-    migratedTimestamp,
-  );
-  if (twoCandleVolume.status !== "ok") {
+  const migrationCandles = await fetchMigrationCandles(mint, migratedTimestamp);
+  if (migrationCandles.status !== "ok") {
     deferredVolumeMints.add(mint);
     deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
     if (source === "new") {
@@ -327,7 +433,7 @@ async function processMintCandidate(
       `avg=${twoCandleVolume.average.toFixed(2)}`,
     );
   }
-  if (twoCandleVolume.average < MIN_TWO_CANDLE_AVG_VOLUME) {
+  if (migrationCandles.average < MIN_TWO_CANDLE_AVG_VOLUME) {
     deferredVolumeCandidates.delete(mint);
     if (deferredVolumeMints.has(mint)) {
       deferredVolumeMints.delete(mint);
@@ -400,6 +506,83 @@ async function processMintCandidate(
   ]);
   const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
   const latestMarketCap = latestQuotedMarketCap ?? marketCap;
+
+  const topBuyersHolderInfo = Array.isArray(topBuyers?.holders?.holderInfo)
+    ? topBuyers.holders.holderInfo
+    : [];
+  const fastSniperCount = topBuyersHolderInfo.filter(
+    (h) => h.is_fast_sniper === 1,
+  ).length;
+
+  const features = buildScreenFeatures({
+    mint,
+    symbol: gmgn?.symbol ?? null,
+    name: gmgn?.name ?? null,
+    marketCap: latestMarketCap,
+    liquidity: toNumber(gmgn?.liquidity),
+    totalFee,
+    holderCount: toNumber(tokenStat?.holder_count) ?? toNumber(gmgn?.holder_count),
+    top10HolderRate:
+      toNumber(tokenStat?.top_10_holder_rate) ??
+      toNumber(securityInfo?.top_10_holder_rate) ??
+      toNumber(gmgn?.dev?.top_10_holder_rate),
+    creatorHoldRate: toNumber(tokenStat?.creator_hold_rate),
+    devTeamHoldRate: toNumber(tokenStat?.dev_team_hold_rate),
+    privateVaultHoldRate: toNumber(tokenStat?.private_vault_hold_rate),
+    topBundlerTraderPercentage: toNumber(tokenStat?.top_bundler_trader_percentage),
+    topEntrapmentTraderPercentage: toNumber(tokenStat?.top_entrapment_trader_percentage),
+    freshWalletRate: toNumber(tokenStat?.fresh_wallet_rate),
+    bluechipOwnerPercentage: toNumber(tokenStat?.bluechip_owner_percentage),
+    botDegenRate: toNumber(tokenStat?.bot_degen_rate),
+    smartWallets: tagWalletCount?.smart_wallets ?? null,
+    freshWallets: tagWalletCount?.fresh_wallets ?? null,
+    renownedWallets: tagWalletCount?.renowned_wallets ?? null,
+    sniperWallets: tagWalletCount?.sniper_wallets ?? null,
+    ratTraderWallets: tagWalletCount?.rat_trader_wallets ?? null,
+    whaleWallets: tagWalletCount?.whale_wallets ?? null,
+    topWallets: tagWalletCount?.top_wallets ?? null,
+    fastSniperCount,
+    topBuyersHolderCount: topBuyers?.holders?.holder_count ?? null,
+    topBuyersSoldCount: topBuyers?.holders?.statusNow?.sold ?? null,
+    topBuyersSoldPartCount: topBuyers?.holders?.statusNow?.sold_part ?? null,
+    topBuyersHoldCount: topBuyers?.holders?.statusNow?.hold ?? null,
+    topBuyersHoldingRate: toNumber(topBuyers?.holders?.statusNow?.holding_rate),
+    topBuyersBoughtRate: toNumber(topBuyers?.holders?.statusNow?.bought_rate),
+    buyTax: toNumber(securityInfo?.buy_tax),
+    sellTax: toNumber(securityInfo?.sell_tax),
+    hideRisk: securityInfo?.hide_risk ?? null,
+    renouncedMint: securityInfo?.renounced_mint ?? null,
+    renouncedFreezeAccount: securityInfo?.renounced_freeze_account ?? null,
+    launchpadPlatform: launchpadInfo?.launchpad_platform ?? null,
+    hasDlmmPool: Boolean(dlmmPool?.pool_address),
+    hasDammV2Pool: Boolean(dammV2Pool?.pool_address),
+    priceNow: toNumber(gmgn?.price?.price),
+    price1m: toNumber(gmgn?.price?.price_1m),
+    price5m: toNumber(gmgn?.price?.price_5m),
+    buys1m: gmgn?.price?.buys_1m ?? null,
+    sells1m: gmgn?.price?.sells_1m ?? null,
+    buys5m: gmgn?.price?.buys_5m ?? null,
+    sells5m: gmgn?.price?.sells_5m ?? null,
+    volume1m: toNumber(gmgn?.price?.volume_1m),
+    volume5m: toNumber(gmgn?.price?.volume_5m),
+    buyVolume1m: toNumber(gmgn?.price?.buy_volume_1m),
+    sellVolume1m: toNumber(gmgn?.price?.sell_volume_1m),
+    buyVolume5m: toNumber(gmgn?.price?.buy_volume_5m),
+    sellVolume5m: toNumber(gmgn?.price?.sell_volume_5m),
+    swaps1m: gmgn?.price?.swaps_1m ?? null,
+    swaps5m: gmgn?.price?.swaps_5m ?? null,
+    hotLevel: gmgn?.price?.hot_level ?? null,
+    visitingCount: toNumber(gmgn?.visiting_count),
+    candles: migrationCandles.candles,
+  });
+  const score = scoreScreenFeatures(features, SCREENER_CONFIG);
+  if (score.rejectReasons.length > 0) {
+    deferredVolumeCandidates.delete(mint);
+    deferredVolumeMints.delete(mint);
+    console.log(`[skip] ${mint} hard reject: ${score.rejectReasons.join(", ")}`);
+    return;
+  }
+
   await sendTelegramAlert(
     gmgn,
     mint,
@@ -407,8 +590,10 @@ async function processMintCandidate(
     latestMarketCap,
     dlmmPool,
     dammV2Pool,
-    twoCandleVolume.average,
+    migrationCandles.average,
     signature,
+    features,
+    score,
   );
   deferredVolumeCandidates.delete(mint);
   if (deferredVolumeMints.has(mint)) {
@@ -605,6 +790,105 @@ async function fetchGmgnTokenSecurity(
   return json.data ?? null;
 }
 
+async function fetchGmgnTokenStat(
+  mint: string,
+): Promise<GmgnTokenStat | null> {
+  const res = await fetch(`${GMGN_TOKEN_STAT_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTokenStat; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTokenStat; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
+async function fetchGmgnTagWalletCount(
+  mint: string,
+): Promise<GmgnTagWalletCount | null> {
+  const res = await fetch(`${GMGN_TAG_WALLET_COUNT_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTagWalletCount; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTagWalletCount; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
+async function fetchGmgnTopBuyers(
+  mint: string,
+): Promise<GmgnTopBuyers | null> {
+  const res = await fetch(`${GMGN_TOP_BUYERS_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTopBuyers; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTopBuyers; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
 async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   const url = new URL(`${GMGN_QUOTE_API_URL}/${GMGN_QUOTE_WALLET}`);
   url.searchParams.set("token_address", mint);
@@ -632,11 +916,16 @@ async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   return toNumber(json.data?.market_cap);
 }
 
-async function fetchTwoCandleAverageVolume(
+async function fetchMigrationCandles(
   mint: string,
   migratedTimestampSec: number,
 ): Promise<
-  { status: "ok"; average: number } | { status: "not_ready"; reason: string }
+  | {
+      status: "ok";
+      average: number;
+      candles: [CandlePoint, CandlePoint, CandlePoint];
+    }
+  | { status: "not_ready"; reason: string }
 > {
   const migratedCandleMs = Math.floor(migratedTimestampSec / 60) * 60 * 1000;
   const afterCandleMs = migratedCandleMs + 60_000;
@@ -682,19 +971,41 @@ async function fetchTwoCandleAverageVolume(
     return { status: "not_ready", reason: "candle_not_closed_yet" };
   }
 
-  const v0 = toNumber(candle0.volume);
-  const v1 = toNumber(candle1.volume);
-  if (v0 === null || v1 === null) {
-    return { status: "not_ready", reason: "candle_volume_missing" };
+  const parsed = [candle0, candle1, candle2].map((c) => ({
+    time: c.time as number,
+    open: toNumber(c.open),
+    high: toNumber(c.high),
+    low: toNumber(c.low),
+    close: toNumber(c.close),
+    volume: toNumber(c.volume),
+    amount: toNumber(c.amount),
+  }));
+
+  if (parsed.some((c) => c.open === null || c.high === null || c.low === null || c.close === null || c.volume === null)) {
+    return { status: "not_ready", reason: "candle_value_missing" };
   }
+
+  const normalized = parsed.map((c) => ({
+    time: c.time,
+    open: c.open as number,
+    high: c.high as number,
+    low: c.low as number,
+    close: c.close as number,
+    volume: c.volume as number,
+    amount: c.amount,
+  })) as [CandlePoint, CandlePoint, CandlePoint];
 
   if (DEBUG_CANDLE_SELECTION) {
     console.log(
-      `[candle] ${mint} migrated_ts=${migratedTimestampSec} candle0=${migratedCandleMs} vol0=${v0.toFixed(6)} candle1=${afterCandleMs} vol1=${v1.toFixed(6)} avg=${((v0 + v1) / 2).toFixed(6)}`,
+      `[candle] ${mint} migrated_ts=${migratedTimestampSec} candle0=${migratedCandleMs} vol0=${normalized[0].volume.toFixed(6)} candle1=${afterCandleMs} vol1=${normalized[1].volume.toFixed(6)} avg=${((normalized[0].volume + normalized[1].volume) / 2).toFixed(6)}`,
     );
   }
 
-  return { status: "ok", average: (v0 + v1) / 2 };
+  return {
+    status: "ok",
+    average: (normalized[0].volume + normalized[1].volume) / 2,
+    candles: normalized,
+  };
 }
 
 async function searchMeteoraPoolByType(
@@ -729,6 +1040,8 @@ async function sendTelegramAlert(
   dammV2Pool: MeteoraPool | null,
   twoCandleAvgVolume: number,
   signature: string,
+  features: ScreenFeatures,
+  score: ScreenScore,
 ): Promise<void> {
   const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
   const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
@@ -750,22 +1063,28 @@ async function sendTelegramAlert(
     quickActions.push(`<a href="${dammV2Link}">Meteora DAMMV2</a>`);
   }
 
+  const compactReasons = score.reasons.slice(0, 4).join(" | ") || "n/a";
+  const greenFlags = score.greenFlags.slice(0, 3).join(" | ") || "n/a";
+  const redFlags = score.redFlags.slice(0, 3).join(" | ") || "n/a";
+
   const text = [
-    "<u>Token Details</u>",
-    `CA: <code>${escapeHtml(mint)}</code>`,
-    `Token Name: ${escapeHtml(token?.name ?? "Unknown")}`,
-    `Token Symbol: ${escapeHtml(token?.symbol ?? "Unknown")}`,
+    `<b>${escapeHtml(score.verdict.toUpperCase())}</b> · <b>${score.finalScore}</b>`,
+    `${escapeHtml(token?.symbol ?? "Unknown")} — <code>${escapeHtml(mint)}</code>`,
     "",
-    "<u>Token Stat</u>",
-    `Total fee: ${fmtNum(totalFee)}`,
-    `Market cap: ${fmtNum(marketCap)}`,
-    `2x1m Avg Volume: ${fmtNum(twoCandleAvgVolume)}`,
+    `<b>Why:</b> ${escapeHtml(compactReasons)}`,
+    `<b>Green:</b> ${escapeHtml(greenFlags)}`,
+    `<b>Red:</b> ${escapeHtml(redFlags)}`,
     "",
-    "<u>Meteora Pool</u>",
-    `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
-    `DAMMV2 Pool: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
+    `<b>Stats</b>`,
+    `MC: ${fmtNum(marketCap)} | Fee: ${fmtNum(totalFee)} | Ratio: ${features.solPer10kMc === null ? "Unknown" : features.solPer10kMc.toFixed(3)}`,
+    `2C Avg Vol: ${fmtNum(twoCandleAvgVolume)} | B/S 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
+    `Top10: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`} | Top buyers sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
+    `Smart: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)} | Rat: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)} | Fast snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
     "",
-    "<u>Quick Action</u>",
+    `<b>Pools</b> DLMM: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
+    `DAMMV2: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
+    "",
+    `<b>Links</b>`,
     ...quickActions,
   ].join("\n");
 
