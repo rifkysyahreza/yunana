@@ -31,13 +31,15 @@ npm install
 - `WATCH_ADDRESSES` (comma-separated Solana addresses to monitor)
 - Optional: `WATCH_PROGRAM_IDS` (comma-separated program IDs for stronger bonding/migration filtering)
 - Optional: `SCAN_INTERVAL_MS` (default `15000`)
-- Optional: `MIN_MC_PER_SOL_FEE` (default `10000`)
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
 - Optional: `MAX_SOL_PER_10K_MC` (default `1`)
 - Optional: `MIN_TWO_CANDLE_AVG_VOLUME` (default `18000`)
+- Optional: `PIPELINE_SUMMARY_EVERY_TICKS` (default `20`, set `0` to disable)
 - Optional: `GMGN_RETRY_COUNT` (default `5`)
 - Optional: `GMGN_RETRY_DELAY_MS` (default `2500`)
+- Optional: `ENABLE_GMGN_TRENDING` (default `false`, enables Phase 3 skeleton poller)
+- Optional: `GMGN_TRENDING_INTERVAL_MS` (default `60000`)
 - Optional: `GMGN_QUOTE_WALLET` (wallet id used in GMGN quotation endpoint path)
 
 3. Run:
@@ -51,6 +53,13 @@ npm run dev
 - This scanner is chain-first (Helius RPC) and does not rely on timeline APIs.
 - Picking good `WATCH_ADDRESSES` is critical. Use migration/bonding-related addresses/programs you trust.
 - Migration detection is currently migration-only (`migrate` signal in logs/instructions).
+- BONK.fun Raydium LaunchLab migrations are extracted directly from the migration instruction mint account, which avoids false candidates from LP/NFT mints in the same tx.
+- Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
+- Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
+- Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
+- Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
 - Tokens with `launchpad_platform = pump_mayhem` are ignored.
 - Hard security gate: token is ignored unless `renounced_mint=true` and `renounced_freeze_account=true`.
+- Pipeline logs now include stage + reason code, for example:
+  `[skip] <mint> stage=ratio reason=sol_per_10k_mc_out_of_range`
