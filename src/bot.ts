@@ -34,6 +34,9 @@ type GmgnToken = {
   symbol?: string;
   name?: string;
   banner?: string;
+  launchpad?: string;
+  launchpad_platform?: string;
+  exchange?: string;
   migrated_timestamp?: number;
   total_fee?: string | number;
   market_cap?: string | number;
@@ -47,7 +50,9 @@ type GmgnToken = {
 
 type GmgnMultiToken = {
   address: string;
+  launchpad?: string;
   launchpad_platform?: string;
+  exchange?: string;
   migrated_timestamp?: number;
 };
 
@@ -67,6 +72,7 @@ type MeteoraPool = {
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
+type LaunchSource = "pumpfun" | "letsbonk" | "unknown";
 type PipelineAction = "defer" | "skip" | "pass" | "alert";
 type PipelineStage = "launchpad" | "security" | "timestamp" | "volume" | "ratio" | "alert";
 
@@ -295,6 +301,7 @@ async function processMintCandidate(
     return;
   }
 
+  const launchSource = classifyLaunchSource(gmgn, launchpadInfo);
   const migratedTimestamp =
     toNumber(launchpadInfo?.migrated_timestamp) ??
     toNumber(gmgn?.migrated_timestamp) ??
@@ -415,6 +422,8 @@ async function processMintCandidate(
     dammV2Pool,
     twoCandleVolume.average,
     signature,
+    launchSource,
+    launchpadInfo,
   );
   deferredVolumeCandidates.delete(mint);
   if (deferredVolumeMints.has(mint)) {
@@ -519,6 +528,40 @@ function extractBonkMigrationMint(
     }
   }
   return null;
+}
+
+function classifyLaunchSource(
+  token: GmgnToken | null,
+  launchpadInfo: GmgnMultiToken | null,
+): LaunchSource {
+  const raw = [
+    token?.launchpad_platform,
+    launchpadInfo?.launchpad_platform,
+    token?.launchpad,
+    launchpadInfo?.launchpad,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (raw.includes("letsbonk") || raw.includes("bonk")) {
+    return "letsbonk";
+  }
+  if (raw.includes("pump.fun") || raw.includes("pumpfun") || raw.includes("pump")) {
+    return "pumpfun";
+  }
+  return "unknown";
+}
+
+function formatLaunchSource(source: LaunchSource): string {
+  switch (source) {
+    case "letsbonk":
+      return "BONK.fun";
+    case "pumpfun":
+      return "Pump.fun";
+    default:
+      return "Unknown";
+  }
 }
 
 function passesFeeMarketCapRatio(
@@ -768,11 +811,18 @@ async function sendTelegramAlert(
   dammV2Pool: MeteoraPool | null,
   twoCandleAvgVolume: number,
   signature: string,
+  launchSource: LaunchSource,
+  launchpadInfo: GmgnMultiToken | null,
 ): Promise<void> {
   const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
   const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
   const gmgnLink = `https://gmgn.ai/sol/token/${mint}`;
+  const solscanTxLink = `https://solscan.io/tx/${signature}`;
   const bubbleMapLink = `https://v2.bubblemaps.io/map?address=${mint}&chain=solana`;
+  const sourceLabel = formatLaunchSource(launchSource);
+  const rawLaunchpad =
+    launchpadInfo?.launchpad_platform ?? token?.launchpad_platform ?? token?.launchpad ?? "Unknown";
+  const rawExchange = launchpadInfo?.exchange ?? token?.exchange ?? token?.pool?.exchange ?? "Unknown";
   const dlmmLink =
     dlmmPoolAddress !== "None"
       ? `https://app.meteora.ag/dlmm/${dlmmPoolAddress}`
@@ -785,6 +835,7 @@ async function sendTelegramAlert(
   const quickActions = [
     `<a href="${gmgnLink}">GMG</a>`,
     `<a href="${bubbleMapLink}">BBLMP</a>`,
+    `<a href="${solscanTxLink}">TX</a>`,
   ];
   if (dlmmLink) {
     quickActions.push(`<a href="${dlmmLink}">DLMM</a>`);
@@ -798,6 +849,7 @@ async function sendTelegramAlert(
     `CA: <code>${escapeHtml(mint)}</code>`,
     `Token Name: ${escapeHtml(token?.name ?? "Unknown")}`,
     `Token Symbol: ${escapeHtml(token?.symbol ?? "Unknown")}`,
+    `Source: ${escapeHtml(sourceLabel)} | Launchpad: ${escapeHtml(rawLaunchpad)} | Exchange: ${escapeHtml(rawExchange)}`,
     "",
     "<u>Token Stat</u>",
     `Total fee: ${fmtNum(totalFee)}`,
