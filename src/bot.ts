@@ -72,7 +72,7 @@ type MeteoraPool = {
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
-type LaunchSource = "pumpfun" | "letsbonk" | "unknown";
+type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
 type PipelineAction = "defer" | "skip" | "pass" | "alert";
 type PipelineStage = "launchpad" | "security" | "timestamp" | "volume" | "ratio" | "alert";
 
@@ -115,6 +115,8 @@ const METEORA_SEARCH_URL =
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const BONK_MIGRATION_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
 const BONK_MIGRATION_MINT_ACCOUNT_INDEX = 1;
+const METEORA_CURVE_MIGRATION_PROGRAM_ID = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
+const METEORA_CURVE_MIGRATION_MINT_ACCOUNT_INDEX = 13;
 
 if (WATCH_ADDRESSES.length === 0) {
   throw new Error(
@@ -504,6 +506,11 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     return [bonkMint];
   }
 
+  const meteoraCurveMint = extractMeteoraCurveMigrationMint(instructions);
+  if (meteoraCurveMint) {
+    return [meteoraCurveMint];
+  }
+
   const mints = new Set<string>();
   for (const b of tx.meta?.postTokenBalances ?? []) {
     if (!b.mint || b.mint === SOL_MINT) {
@@ -530,6 +537,21 @@ function extractBonkMigrationMint(
   return null;
 }
 
+function extractMeteoraCurveMigrationMint(
+  instructions: Array<{ programId?: string; accounts?: string[]; parsed?: { type?: string } }>,
+): string | null {
+  for (const ix of instructions) {
+    if (ix.programId !== METEORA_CURVE_MIGRATION_PROGRAM_ID) {
+      continue;
+    }
+    const mint = ix.accounts?.[METEORA_CURVE_MIGRATION_MINT_ACCOUNT_INDEX];
+    if (mint && mint !== SOL_MINT) {
+      return mint;
+    }
+  }
+  return null;
+}
+
 function classifyLaunchSource(
   token: GmgnToken | null,
   launchpadInfo: GmgnMultiToken | null,
@@ -544,6 +566,9 @@ function classifyLaunchSource(
     .join(" ")
     .toLowerCase();
 
+  if (raw.includes("meteora_virtual_curve") || raw.includes("virtual_curve")) {
+    return "meteora_curve";
+  }
   if (raw.includes("letsbonk") || raw.includes("bonk")) {
     return "letsbonk";
   }
@@ -557,6 +582,8 @@ function formatLaunchSource(source: LaunchSource): string {
   switch (source) {
     case "letsbonk":
       return "BONK.fun";
+    case "meteora_curve":
+      return "Meteora Curve";
     case "pumpfun":
       return "Pump.fun";
     default:

@@ -52,7 +52,8 @@ npm run dev
 - Picking good `WATCH_ADDRESSES` is critical. Use migration/bonding-related addresses/programs you trust.
 - Migration detection is currently migration-only (`migrate` signal in logs/instructions).
 - BONK.fun Raydium LaunchLab migrations are extracted directly from the migration instruction mint account, which avoids false candidates from LP/NFT mints in the same tx.
-- Alerts now surface source context (for example Pump.fun vs BONK.fun) using GMGN launchpad metadata when available.
+- Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
+- Alerts now surface source context (for example Pump.fun vs BONK.fun vs Meteora Curve) using GMGN launchpad metadata when available.
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
 - Tokens with `launchpad_platform = pump_mayhem` are ignored.
 - Hard security gate: token is ignored unless `renounced_mint=true` and `renounced_freeze_account=true`.
