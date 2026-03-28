@@ -56,6 +56,21 @@ type GmgnMultiToken = {
   migrated_timestamp?: number;
 };
 
+type GmgnTrendingToken = {
+  address: string;
+  symbol?: string;
+  name?: string;
+  logo?: string;
+  market_cap?: string | number;
+  gas_fee?: string | number;
+  liquidity?: string | number;
+  volume?: string | number;
+  creation_timestamp?: number;
+  launchpad?: string;
+  launchpad_platform?: string;
+  exchange?: string;
+};
+
 type GmgnTokenSecurity = {
   address: string;
   renounced_mint?: boolean;
@@ -72,6 +87,7 @@ type MeteoraPool = {
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
+type AlertKind = "migration" | "gmgn_trending";
 type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
 type PipelineAction = "defer" | "skip" | "pass" | "alert";
 type PipelineStage = "launchpad" | "security" | "timestamp" | "volume" | "ratio" | "alert";
@@ -96,6 +112,11 @@ const DEBUG_CANDLE_SELECTION =
   (process.env.DEBUG_CANDLE_SELECTION ?? "false").toLowerCase() === "true";
 const GMGN_RETRY_COUNT = Number(process.env.GMGN_RETRY_COUNT ?? "5");
 const GMGN_RETRY_DELAY_MS = Number(process.env.GMGN_RETRY_DELAY_MS ?? "2500");
+const ENABLE_GMGN_TRENDING =
+  (process.env.ENABLE_GMGN_TRENDING ?? "false").toLowerCase() === "true";
+const GMGN_TRENDING_INTERVAL_MS = Number(
+  process.env.GMGN_TRENDING_INTERVAL_MS ?? "60000",
+);
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
 
@@ -107,6 +128,7 @@ const GMGN_TOKEN_MCAP_CANDLES_URL =
   "https://gmgn.ai/api/v1/token_mcap_candles/sol";
 const GMGN_QUOTE_API_URL =
   "https://gmgn.ai/defi/quotation/v1/smartmoney/sol/walletstat";
+const GMGN_TRENDING_URL = "https://gmgn.ai/api/v1/rank/sol/swaps/1m";
 const GMGN_QUOTE_WALLET =
   process.env.GMGN_QUOTE_WALLET ??
   "HVHAvzNxQUhvTWr5uoNNNfrQYfzcsReUFM4HnZwfeHkQ";
@@ -132,6 +154,7 @@ const deferredVolumeCandidates = new Map<
   { signature: string; migratedTimestamp: number }
 >();
 const loggedSecurityNotReadyMints = new Set<string>();
+const seenTrendingMints = new Map<string, number>();
 const inFlightMints = new Set<string>();
 let isScanTickRunning = false;
 let telegramUpdateOffset = 0;
@@ -148,6 +171,9 @@ async function main(): Promise<void> {
   );
   console.log(`[boot] volume gate 2x1m avg >= ${MIN_TWO_CANDLE_AVG_VOLUME}`);
   console.log(`[boot] pipeline summary every ${PIPELINE_SUMMARY_EVERY_TICKS} ticks`);
+  console.log(
+    `[boot] gmgn trending enabled=${ENABLE_GMGN_TRENDING} interval=${GMGN_TRENDING_INTERVAL_MS}ms`,
+  );
   if (FORWARD_ALL_MIGRATED) {
     console.log(
       "[boot] ratio filter is DISABLED because FORWARD_ALL_MIGRATED=true",
@@ -182,6 +208,9 @@ async function scanTick(): Promise<void> {
     await processDeferredVolumeCandidates();
     for (const address of WATCH_ADDRESSES) {
       await scanAddress(address);
+    }
+    if (ENABLE_GMGN_TRENDING && tickCounter % Math.max(1, Math.round(GMGN_TRENDING_INTERVAL_MS / SCAN_INTERVAL_MS)) === 0) {
+      await processTrendingTick();
     }
     tickCounter += 1;
     maybePrintPipelineSummary();
@@ -249,6 +278,31 @@ async function processDeferredVolumeCandidates(): Promise<void> {
   }
 }
 
+async function processTrendingTick(): Promise<void> {
+  const tokens = await fetchGmgnTrendingTokens();
+  if (tokens.length === 0) {
+    return;
+  }
+
+  for (const token of tokens) {
+    const mint = token.address;
+    if (!mint || seenTrendingMints.has(mint)) {
+      continue;
+    }
+
+    const launchSource = classifyLaunchSource(token, null);
+    const totalFee = toNumber(token.gas_fee);
+    const marketCap = toNumber(token.market_cap);
+
+    seenTrendingMints.set(mint, Date.now());
+    console.log(
+      `[trend] alert ${mint} source=${formatLaunchSource(launchSource)} mc=${fmtNum(marketCap)} gas_fee=${fmtNum(totalFee)}`,
+    );
+
+    await sendTrendingTelegramAlert(token, launchSource);
+  }
+}
+
 async function processMintCandidate(
   mint: string,
   signature: string,
@@ -267,6 +321,7 @@ async function processMintCandidate(
       fetchGmgnTokenSecurity(mint),
       fetchGmgnQuoteMarketCap(mint),
     ]);
+  const launchSource = classifyLaunchSource(gmgn, launchpadInfo);
 
   if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
     deferredVolumeCandidates.delete(mint);
@@ -303,7 +358,6 @@ async function processMintCandidate(
     return;
   }
 
-  const launchSource = classifyLaunchSource(gmgn, launchpadInfo);
   const migratedTimestamp =
     toNumber(launchpadInfo?.migrated_timestamp) ??
     toNumber(gmgn?.migrated_timestamp) ??
@@ -416,6 +470,7 @@ async function processMintCandidate(
   const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
   const latestMarketCap = latestQuotedMarketCap ?? marketCap;
   await sendTelegramAlert(
+    "migration",
     gmgn,
     mint,
     totalFee,
@@ -553,8 +608,8 @@ function extractMeteoraCurveMigrationMint(
 }
 
 function classifyLaunchSource(
-  token: GmgnToken | null,
-  launchpadInfo: GmgnMultiToken | null,
+  token: Pick<GmgnToken, "launchpad" | "launchpad_platform"> | null,
+  launchpadInfo: Pick<GmgnMultiToken, "launchpad" | "launchpad_platform"> | null,
 ): LaunchSource {
   const raw = [
     token?.launchpad_platform,
@@ -676,6 +731,41 @@ async function fetchGmgnLaunchpadInfo(
     return null;
   }
   return json.data?.[0] ?? null;
+}
+
+async function fetchGmgnTrendingTokens(): Promise<GmgnTrendingToken[]> {
+  const url = new URL(GMGN_TRENDING_URL);
+  url.searchParams.set("orderby", "volume");
+  url.searchParams.set("direction", "desc");
+  url.searchParams.append("filters[]", "renounced");
+  url.searchParams.append("filters[]", "frozen");
+  url.searchParams.append("filters[]", "is_out_market");
+  url.searchParams.set("limit", "20");
+  url.searchParams.set("min_created", "4m");
+  url.searchParams.set("max_created", "1440m");
+  url.searchParams.set("min_volume", "15000");
+  url.searchParams.set("min_gas_fee", "1");
+
+  const res = await fetch(url.toString(), {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://gmgn.ai/trend/chain=sol",
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return [];
+  }
+
+  const json = (await res.json()) as {
+    code?: number;
+    data?: { rank?: GmgnTrendingToken[] };
+  };
+  if (json.code !== undefined && json.code !== 0) {
+    return [];
+  }
+  return Array.isArray(json.data?.rank) ? json.data.rank : [];
 }
 
 async function fetchGmgnTokenSecurity(
@@ -829,7 +919,67 @@ async function searchMeteoraPoolByType(
   return pools.length > 0 ? pools[0] : null;
 }
 
+async function sendTrendingTelegramAlert(
+  token: GmgnTrendingToken,
+  launchSource: LaunchSource,
+): Promise<void> {
+  const mint = token.address;
+  const gmgnLink = `https://gmgn.ai/sol/token/${mint}`;
+  const bubbleMapLink = `https://v2.bubblemaps.io/map?address=${mint}&chain=solana`;
+  const sourceLabel = formatLaunchSource(launchSource);
+  const totalFee = toNumber(token.gas_fee);
+  const marketCap = toNumber(token.market_cap);
+  const quickActions = [
+    `<a href="${gmgnLink}">GMG</a>`,
+    `<a href="${bubbleMapLink}">BBLMP</a>`,
+  ];
+
+  const text = [
+    `<b>GMGN Trending</b>`,
+    "<u>Token Details</u>",
+    `CA: <code>${escapeHtml(mint)}</code>`,
+    `Token Name: ${escapeHtml(token.name ?? "Unknown")}`,
+    `Token Symbol: ${escapeHtml(token.symbol ?? "Unknown")}`,
+    `Source: ${escapeHtml(sourceLabel)} | Launchpad: ${escapeHtml(token.launchpad_platform ?? token.launchpad ?? "Unknown")} | Exchange: ${escapeHtml(token.exchange ?? "Unknown")}`,
+    "",
+    "<u>Token Stat</u>",
+    `Gas fee: ${fmtNum(totalFee)}`,
+    `Market cap: ${fmtNum(marketCap)}`,
+    `Volume: ${fmtNum(toNumber(token.volume))}`,
+    `Liquidity: ${fmtNum(toNumber(token.liquidity))}`,
+    "",
+    `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
+  ].join("\n");
+
+  const payloadBase = {
+    chat_id: TELEGRAM_CHAT_ID,
+    parse_mode: "HTML",
+  };
+
+  const imageUrl = token.logo;
+  const res = imageUrl
+    ? await sendTelegramPhotoWithFallback(imageUrl, text, payloadBase)
+    : await fetch(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...payloadBase,
+            text,
+            disable_web_page_preview: false,
+          }),
+        },
+      );
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.error("[telegram] trending send failed", body);
+  }
+}
+
 async function sendTelegramAlert(
+  alertKind: AlertKind,
   token: GmgnToken | null,
   mint: string,
   totalFee: number | null,
@@ -838,14 +988,15 @@ async function sendTelegramAlert(
   dammV2Pool: MeteoraPool | null,
   twoCandleAvgVolume: number,
   signature: string,
-  launchSource: LaunchSource,
-  launchpadInfo: GmgnMultiToken | null,
+  launchSource: LaunchSource = "unknown",
+  launchpadInfo: GmgnMultiToken | null = null,
 ): Promise<void> {
   const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
   const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
   const gmgnLink = `https://gmgn.ai/sol/token/${mint}`;
   const solscanTxLink = `https://solscan.io/tx/${signature}`;
   const bubbleMapLink = `https://v2.bubblemaps.io/map?address=${mint}&chain=solana`;
+  const title = alertKind === "gmgn_trending" ? "GMGN Trending" : "Token Migration";
   const sourceLabel = formatLaunchSource(launchSource);
   const rawLaunchpad =
     launchpadInfo?.launchpad_platform ?? token?.launchpad_platform ?? token?.launchpad ?? "Unknown";
@@ -872,6 +1023,7 @@ async function sendTelegramAlert(
   }
 
   const text = [
+    `<b>${escapeHtml(title)}</b>`,
     "<u>Token Details</u>",
     `CA: <code>${escapeHtml(mint)}</code>`,
     `Token Name: ${escapeHtml(token?.name ?? "Unknown")}`,
@@ -1165,6 +1317,11 @@ function pruneSeenMints(): void {
   for (const [mint, ts] of seenMints.entries()) {
     if (now - ts > 1000 * 60 * 60 * 6) {
       seenMints.delete(mint);
+    }
+  }
+  for (const [mint, ts] of seenTrendingMints.entries()) {
+    if (now - ts > 1000 * 60 * 60 * 24) {
+      seenTrendingMints.delete(mint);
     }
   }
 }
