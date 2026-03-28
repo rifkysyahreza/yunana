@@ -289,10 +289,17 @@ async function processTrendingTick(): Promise<void> {
     if (!mint || seenTrendingMints.has(mint)) {
       continue;
     }
+
+    const launchSource = classifyLaunchSource(token, null);
+    const totalFee = toNumber(token.gas_fee);
+    const marketCap = toNumber(token.market_cap);
+
     seenTrendingMints.set(mint, Date.now());
     console.log(
-      `[trend] queued ${mint} source=${formatLaunchSource(classifyLaunchSource(token, null))} mc=${fmtNum(toNumber(token.market_cap))} gas_fee=${fmtNum(toNumber(token.gas_fee))}`,
+      `[trend] alert ${mint} source=${formatLaunchSource(launchSource)} mc=${fmtNum(marketCap)} gas_fee=${fmtNum(totalFee)}`,
     );
+
+    await sendTrendingTelegramAlert(token, launchSource);
   }
 }
 
@@ -910,6 +917,65 @@ async function searchMeteoraPoolByType(
   const json = (await res.json()) as { data?: MeteoraPool[] };
   const pools = Array.isArray(json.data) ? json.data : [];
   return pools.length > 0 ? pools[0] : null;
+}
+
+async function sendTrendingTelegramAlert(
+  token: GmgnTrendingToken,
+  launchSource: LaunchSource,
+): Promise<void> {
+  const mint = token.address;
+  const gmgnLink = `https://gmgn.ai/sol/token/${mint}`;
+  const bubbleMapLink = `https://v2.bubblemaps.io/map?address=${mint}&chain=solana`;
+  const sourceLabel = formatLaunchSource(launchSource);
+  const totalFee = toNumber(token.gas_fee);
+  const marketCap = toNumber(token.market_cap);
+  const quickActions = [
+    `<a href="${gmgnLink}">GMG</a>`,
+    `<a href="${bubbleMapLink}">BBLMP</a>`,
+  ];
+
+  const text = [
+    `<b>GMGN Trending</b>`,
+    "<u>Token Details</u>",
+    `CA: <code>${escapeHtml(mint)}</code>`,
+    `Token Name: ${escapeHtml(token.name ?? "Unknown")}`,
+    `Token Symbol: ${escapeHtml(token.symbol ?? "Unknown")}`,
+    `Source: ${escapeHtml(sourceLabel)} | Launchpad: ${escapeHtml(token.launchpad_platform ?? token.launchpad ?? "Unknown")} | Exchange: ${escapeHtml(token.exchange ?? "Unknown")}`,
+    "",
+    "<u>Token Stat</u>",
+    `Gas fee: ${fmtNum(totalFee)}`,
+    `Market cap: ${fmtNum(marketCap)}`,
+    `Volume: ${fmtNum(toNumber(token.volume))}`,
+    `Liquidity: ${fmtNum(toNumber(token.liquidity))}`,
+    "",
+    `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
+  ].join("\n");
+
+  const payloadBase = {
+    chat_id: TELEGRAM_CHAT_ID,
+    parse_mode: "HTML",
+  };
+
+  const imageUrl = token.logo;
+  const res = imageUrl
+    ? await sendTelegramPhotoWithFallback(imageUrl, text, payloadBase)
+    : await fetch(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...payloadBase,
+            text,
+            disable_web_page_preview: false,
+          }),
+        },
+      );
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.error("[telegram] trending send failed", body);
+  }
 }
 
 async function sendTelegramAlert(
