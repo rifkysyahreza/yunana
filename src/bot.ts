@@ -17,6 +17,7 @@ type ParsedTransaction = {
       accountKeys: Array<string | { pubkey: string }>;
       instructions?: Array<{
         programId?: string;
+        accounts?: string[];
         parsed?: { type?: string };
       }>;
     };
@@ -106,6 +107,8 @@ const GMGN_QUOTE_WALLET =
 const METEORA_SEARCH_URL =
   "https://pool-discovery-api.datapi.meteora.ag/search";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const BONK_MIGRATION_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
+const BONK_MIGRATION_MINT_ACCOUNT_INDEX = 1;
 
 if (WATCH_ADDRESSES.length === 0) {
   throw new Error(
@@ -466,8 +469,9 @@ function maybePrintPipelineSummary(): void {
 }
 
 function extractMigratedMints(tx: ParsedTransaction): string[] {
+  const instructions = tx.transaction.message.instructions ?? [];
   const logText = (tx.meta?.logMessages ?? []).join(" ").toLowerCase();
-  const instructionTypes = (tx.transaction.message.instructions ?? [])
+  const instructionTypes = instructions
     .map((ix) => ix.parsed?.type?.toLowerCase() ?? "")
     .join(" ");
   const hasMigrationSignal =
@@ -486,6 +490,11 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     return [];
   }
 
+  const bonkMint = extractBonkMigrationMint(instructions);
+  if (bonkMint) {
+    return [bonkMint];
+  }
+
   const mints = new Set<string>();
   for (const b of tx.meta?.postTokenBalances ?? []) {
     if (!b.mint || b.mint === SOL_MINT) {
@@ -495,6 +504,21 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
   }
 
   return Array.from(mints);
+}
+
+function extractBonkMigrationMint(
+  instructions: Array<{ programId?: string; accounts?: string[]; parsed?: { type?: string } }>,
+): string | null {
+  for (const ix of instructions) {
+    if (ix.programId !== BONK_MIGRATION_PROGRAM_ID) {
+      continue;
+    }
+    const mint = ix.accounts?.[BONK_MIGRATION_MINT_ACCOUNT_INDEX];
+    if (mint && mint !== SOL_MINT) {
+      return mint;
+    }
+  }
+  return null;
 }
 
 function passesFeeMarketCapRatio(
