@@ -153,6 +153,8 @@ type MeteoraPool = {
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
+type PipelineAction = "defer" | "skip" | "pass" | "alert";
+type PipelineStage = "launchpad" | "security" | "timestamp" | "volume" | "ratio" | "alert";
 
 const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
@@ -166,6 +168,9 @@ const MIN_SOL_PER_10K_MC = Number(process.env.MIN_SOL_PER_10K_MC ?? "0.8");
 const MAX_SOL_PER_10K_MC = Number(process.env.MAX_SOL_PER_10K_MC ?? "1");
 const MIN_TWO_CANDLE_AVG_VOLUME = Number(
   process.env.MIN_TWO_CANDLE_AVG_VOLUME ?? "18000",
+);
+const PIPELINE_SUMMARY_EVERY_TICKS = Number(
+  process.env.PIPELINE_SUMMARY_EVERY_TICKS ?? "20",
 );
 const DEBUG_CANDLE_SELECTION =
   (process.env.DEBUG_CANDLE_SELECTION ?? "false").toLowerCase() === "true";
@@ -221,8 +226,12 @@ const deferredVolumeCandidates = new Map<
   string,
   { signature: string; migratedTimestamp: number }
 >();
+const inFlightMints = new Set<string>();
+let isScanTickRunning = false;
 let telegramUpdateOffset = 0;
 let telegramBotUsername = "";
+let tickCounter = 0;
+const pipelineCounters = new Map<string, number>();
 
 async function main(): Promise<void> {
   console.log(`[boot] monitor start. interval=${SCAN_INTERVAL_MS}ms`);
@@ -232,6 +241,7 @@ async function main(): Promise<void> {
     `[boot] ratio gate sol_per_10k_mc=${MIN_SOL_PER_10K_MC}..${MAX_SOL_PER_10K_MC}`,
   );
   console.log(`[boot] volume gate 2x1m avg >= ${MIN_TWO_CANDLE_AVG_VOLUME}`);
+  console.log(`[boot] pipeline summary every ${PIPELINE_SUMMARY_EVERY_TICKS} ticks`);
   if (FORWARD_ALL_MIGRATED) {
     console.log(
       "[boot] ratio filter is DISABLED because FORWARD_ALL_MIGRATED=true",
@@ -257,14 +267,22 @@ async function bootstrapCursors(): Promise<void> {
 }
 
 async function scanTick(): Promise<void> {
+  if (isScanTickRunning) {
+    return;
+  }
+  isScanTickRunning = true;
   try {
     pruneSeenMints();
     await processDeferredVolumeCandidates();
     for (const address of WATCH_ADDRESSES) {
       await scanAddress(address);
     }
+    tickCounter += 1;
+    maybePrintPipelineSummary();
   } catch (err) {
     console.error("[scan] tick error", err);
+  } finally {
+    isScanTickRunning = false;
   }
 }
 
@@ -331,7 +349,12 @@ async function processMintCandidate(
   migratedTimestampHint?: number,
   source: "new" | "deferred" = "new",
 ): Promise<void> {
-  const [gmgn, launchpadInfo, securityInfo, tokenStat, tagWalletCount, topBuyers, quotedMarketCap] =
+  if (inFlightMints.has(mint)) {
+    return;
+  }
+  inFlightMints.add(mint);
+  try {
+  const [gmgn, launchpadInfo, securityInfo, quotedMarketCap] =
     await Promise.all([
       fetchGmgnTokenWithRetry(mint),
       fetchGmgnLaunchpadInfo(mint),
@@ -345,7 +368,7 @@ async function processMintCandidate(
   if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
-    console.log(`[skip] ${mint} launchpad_platform=pump_mayhem`);
+    logPipeline("skip", "launchpad", mint, "launchpad_platform_pump_mayhem");
     return;
   }
   const hasSecurityFlags =
@@ -356,7 +379,7 @@ async function processMintCandidate(
       signature,
       migratedTimestamp: migratedTimestampHint ?? 0,
     });
-    console.log(`[defer] ${mint} security data not ready`);
+    logPipeline("defer", "security", mint, "security_data_not_ready");
     return;
   }
   if (
@@ -365,12 +388,12 @@ async function processMintCandidate(
   ) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
-    console.log(
-      `[skip] ${mint} security gate failed (renounced_mint=${String(
-        securityInfo?.renounced_mint,
-      )}, renounced_freeze_account=${String(
-        securityInfo?.renounced_freeze_account,
-      )})`,
+    logPipeline(
+      "skip",
+      "security",
+      mint,
+      "renounce_gate_failed",
+      `renounced_mint=${String(securityInfo?.renounced_mint)} renounced_freeze_account=${String(securityInfo?.renounced_freeze_account)}`,
     );
     return;
   }
@@ -382,7 +405,7 @@ async function processMintCandidate(
   if (!migratedTimestamp) {
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
-    console.log(`[skip] ${mint} missing migrated_timestamp`);
+    logPipeline("skip", "timestamp", mint, "missing_migrated_timestamp");
     return;
   }
 
@@ -391,34 +414,54 @@ async function processMintCandidate(
     deferredVolumeMints.add(mint);
     deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
     if (source === "new") {
-      console.log(
-        `[defer] ${mint} volume gate waiting (${migrationCandles.reason})`,
+      logPipeline(
+        "defer",
+        "volume",
+        mint,
+        "volume_waiting",
+        `reason=${twoCandleVolume.reason}`,
       );
     }
     return;
   }
   if (deferredVolumeMints.has(mint)) {
-    console.log(
-      `[resume] ${mint} volume gate ready avg=${migrationCandles.average.toFixed(2)}`,
+    logPipeline(
+      "pass",
+      "volume",
+      mint,
+      "volume_ready_after_defer",
+      `avg=${twoCandleVolume.average.toFixed(2)}`,
     );
   }
   if (migrationCandles.average < MIN_TWO_CANDLE_AVG_VOLUME) {
     deferredVolumeCandidates.delete(mint);
     if (deferredVolumeMints.has(mint)) {
       deferredVolumeMints.delete(mint);
-      console.log(
-        `[skip] ${mint} deferred token failed volume gate avg=${migrationCandles.average.toFixed(2)}`,
+      logPipeline(
+        "skip",
+        "volume",
+        mint,
+        "avg_below_threshold_after_defer",
+        `avg=${twoCandleVolume.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
       );
       return;
     }
-    console.log(
-      `[skip] ${mint} volume gate failed avg=${migrationCandles.average.toFixed(2)}`,
+    logPipeline(
+      "skip",
+      "volume",
+      mint,
+      "avg_below_threshold",
+      `avg=${twoCandleVolume.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
     );
     return;
   }
   if (deferredVolumeMints.has(mint)) {
-    console.log(
-      `[pass] ${mint} deferred token passed volume gate avg=${migrationCandles.average.toFixed(2)}`,
+    logPipeline(
+      "pass",
+      "volume",
+      mint,
+      "avg_above_threshold_after_defer",
+      `avg=${twoCandleVolume.average.toFixed(2)}`,
     );
   }
 
@@ -429,8 +472,31 @@ async function processMintCandidate(
     toNumber(gmgn?.marketcap) ??
     toNumber(gmgn?.fdv);
   if (!FORWARD_ALL_MIGRATED && !passesFeeMarketCapRatio(totalFee, marketCap)) {
+    const solPer10kMc =
+      totalFee !== null &&
+      marketCap !== null &&
+      totalFee > 0 &&
+      marketCap > 0
+        ? (totalFee * 10000) / marketCap
+        : null;
     deferredVolumeCandidates.delete(mint);
     deferredVolumeMints.delete(mint);
+    if (solPer10kMc === null) {
+      logPipeline(
+        "skip",
+        "ratio",
+        mint,
+        "ratio_input_missing",
+      );
+    } else {
+      logPipeline(
+        "skip",
+        "ratio",
+        mint,
+        "sol_per_10k_mc_out_of_range",
+        `value=${solPer10kMc.toFixed(4)} expected=${MIN_SOL_PER_10K_MC}..${MAX_SOL_PER_10K_MC}`,
+      );
+    }
     return;
   }
 
@@ -532,10 +598,41 @@ async function processMintCandidate(
   deferredVolumeCandidates.delete(mint);
   if (deferredVolumeMints.has(mint)) {
     deferredVolumeMints.delete(mint);
-    console.log(`[alert] sent for ${mint} from ${signature} (after defer)`);
+    logPipeline("alert", "alert", mint, "sent_after_defer", `signature=${signature}`);
   } else {
-    console.log(`[alert] sent for ${mint} from ${signature}`);
+    logPipeline("alert", "alert", mint, "sent", `signature=${signature}`);
   }
+  } finally {
+    inFlightMints.delete(mint);
+  }
+}
+
+function logPipeline(
+  action: PipelineAction,
+  stage: PipelineStage,
+  mint: string,
+  reason: string,
+  details?: string,
+): void {
+  const key = `${action}|${stage}|${reason}`;
+  pipelineCounters.set(key, (pipelineCounters.get(key) ?? 0) + 1);
+  const suffix = details ? ` ${details}` : "";
+  console.log(`[${action}] ${mint} stage=${stage} reason=${reason}${suffix}`);
+}
+
+function maybePrintPipelineSummary(): void {
+  if (PIPELINE_SUMMARY_EVERY_TICKS <= 0) {
+    return;
+  }
+  if (tickCounter % PIPELINE_SUMMARY_EVERY_TICKS !== 0) {
+    return;
+  }
+  const top = Array.from(pipelineCounters.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(" | ");
+  console.log(`[pipeline-summary] ticks=${tickCounter} ${top || "no-events"}`);
 }
 
 function extractMigratedMints(tx: ParsedTransaction): string[] {
@@ -1092,7 +1189,9 @@ async function startTelegramPingListener(): Promise<void> {
 }
 
 async function fetchTelegramBotUsername(): Promise<string> {
-  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`,
+  );
   if (!res.ok) {
     throw new Error(`getMe http ${res.status}`);
   }
@@ -1108,7 +1207,9 @@ async function fetchTelegramBotUsername(): Promise<string> {
 }
 
 async function pollTelegramUpdates(): Promise<void> {
-  const url = new URL(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`);
+  const url = new URL(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`,
+  );
   url.searchParams.set("timeout", "0");
   url.searchParams.set("limit", "50");
   if (telegramUpdateOffset > 0) {
