@@ -94,7 +94,7 @@ export type ScreenScore = {
   poolScore: number;
   riskPenalty: number;
   finalScore: number;
-  verdict: "reject" | "watch" | "tradeable" | "high-risk-momentum" | "strong-structure";
+  verdict: "reject" | "watch" | "tradeable" | "scalp-only" | "runner-candidate";
   reasons: string[];
   rejectReasons: string[];
   greenFlags: string[];
@@ -349,39 +349,13 @@ export function scoreScreenFeatures(
   ) {
     rejectReasons.push("rat trader wallet concentration too high");
   }
-  if (
-    features.top10HolderRate !== null &&
-    features.top10HolderRate > config.maxTop10HolderRate
-  ) {
-    rejectReasons.push("top10 concentration too high");
-  }
-  if (
-    features.creatorHoldRate !== null &&
-    features.creatorHoldRate > config.maxCreatorHoldRate
-  ) {
-    rejectReasons.push("creator hold too high");
-  }
-  if (
-    features.topBuyersHolderCount !== null &&
-    features.topBuyersSoldCount !== null &&
-    features.topBuyersHolderCount > 0 &&
-    features.topBuyersSoldCount / features.topBuyersHolderCount > config.maxTopBuyerSoldRatio
-  ) {
-    rejectReasons.push("top buyers mostly fully sold");
-  }
-  if (
-    features.topBundlerTraderPercentage !== null &&
-    features.topBundlerTraderPercentage > config.maxBundlerRate
-  ) {
-    rejectReasons.push("bundler concentration too high");
-  }
 
   let structureScore = 0;
   if (features.twoCandleAvgVolume !== null) {
-    structureScore += clamp(features.twoCandleAvgVolume / 25000, 0, 1.5) * 20;
+    structureScore += clamp(features.twoCandleAvgVolume / 25000, 0, 1.6) * 24;
   }
   if (features.volumePersistenceRatio !== null) {
-    structureScore += clamp(features.volumePersistenceRatio, 0, 1.25) * 12;
+    structureScore += clamp(features.volumePersistenceRatio, 0, 1.25) * 14;
   }
   if (features.c0) {
     structureScore += clamp(features.c0.bodyPctOfRange, 0, 1) * 10;
@@ -400,22 +374,22 @@ export function scoreScreenFeatures(
 
   let flowScore = 0;
   if (features.buySellRatio1m !== null) {
-    flowScore += clamp(features.buySellRatio1m / 2, 0, 1.5) * 10;
+    flowScore += clamp(features.buySellRatio1m / 2, 0, 1.7) * 12;
   }
   if (features.buySellRatio5m !== null) {
-    flowScore += clamp(features.buySellRatio5m / 2, 0, 1.5) * 8;
+    flowScore += clamp(features.buySellRatio5m / 2, 0, 1.6) * 8;
   }
   if (features.buyVolumeDominance1m !== null) {
-    flowScore += clamp(features.buyVolumeDominance1m, 0, 1) * 10;
+    flowScore += clamp(features.buyVolumeDominance1m, 0, 1) * 12;
   }
   if (features.buyVolumeDominance5m !== null) {
     flowScore += clamp(features.buyVolumeDominance5m, 0, 1) * 8;
   }
   if (features.momentum1mPct !== null) {
-    flowScore += clamp(features.momentum1mPct * 10, -1, 1.5) * 6;
+    flowScore += clamp(features.momentum1mPct * 10, -1, 1.8) * 8;
   }
   if (features.momentum5mPct !== null) {
-    flowScore += clamp(features.momentum5mPct * 10, -1, 1.5) * 8;
+    flowScore += clamp(features.momentum5mPct * 10, -1, 1.5) * 6;
   }
   if (features.hotLevel !== null) {
     flowScore += clamp(features.hotLevel / 3, 0, 1) * 4;
@@ -454,25 +428,25 @@ export function scoreScreenFeatures(
 
   let riskPenalty = 0;
   if (features.top10HolderRate !== null) {
-    riskPenalty += clamp(features.top10HolderRate / 0.25, 0, 2) * 12;
+    riskPenalty += clamp(features.top10HolderRate / 0.25, 0, 2) * 8;
   }
   if (features.creatorHoldRate !== null) {
-    riskPenalty += clamp(features.creatorHoldRate / 0.05, 0, 2) * 10;
+    riskPenalty += clamp(features.creatorHoldRate / 0.05, 0, 2) * 6;
   }
   if (features.devTeamHoldRate !== null) {
-    riskPenalty += clamp(features.devTeamHoldRate / 0.05, 0, 2) * 8;
+    riskPenalty += clamp(features.devTeamHoldRate / 0.05, 0, 2) * 5;
   }
   if (features.privateVaultHoldRate !== null) {
-    riskPenalty += clamp(features.privateVaultHoldRate / 0.05, 0, 2) * 8;
+    riskPenalty += clamp(features.privateVaultHoldRate / 0.05, 0, 2) * 5;
   }
   if (features.topBundlerTraderPercentage !== null) {
-    riskPenalty += clamp(features.topBundlerTraderPercentage / 0.35, 0, 2) * 12;
+    riskPenalty += clamp(features.topBundlerTraderPercentage / 0.35, 0, 2) * 8;
   }
   if (features.topEntrapmentTraderPercentage !== null) {
-    riskPenalty += clamp(features.topEntrapmentTraderPercentage / 0.12, 0, 2) * 10;
+    riskPenalty += clamp(features.topEntrapmentTraderPercentage / 0.12, 0, 2) * 8;
   }
   if (features.botDegenRate !== null) {
-    riskPenalty += clamp(features.botDegenRate / 0.2, 0, 2) * 8;
+    riskPenalty += clamp(features.botDegenRate / 0.2, 0, 2) * 6;
   }
   if (
     features.sniperWallets !== null &&
@@ -480,7 +454,7 @@ export function scoreScreenFeatures(
     features.holderCount > 0
   ) {
     riskPenalty +=
-      clamp(features.sniperWallets / features.holderCount, 0, 0.08) * 80;
+      clamp(features.sniperWallets / features.holderCount, 0, 0.08) * 50;
   }
   if (
     features.ratTraderWallets !== null &&
@@ -488,7 +462,7 @@ export function scoreScreenFeatures(
     features.holderCount > 0
   ) {
     riskPenalty +=
-      clamp(features.ratTraderWallets / features.holderCount, 0, 0.08) * 100;
+      clamp(features.ratTraderWallets / features.holderCount, 0, 0.08) * 60;
   }
   if (
     features.freshWallets !== null &&
@@ -496,7 +470,7 @@ export function scoreScreenFeatures(
     features.holderCount > 0
   ) {
     riskPenalty +=
-      clamp(features.freshWallets / features.holderCount, 0, 0.25) * 20;
+      clamp(features.freshWallets / features.holderCount, 0, 0.25) * 10;
   }
   if (
     features.fastSniperCount !== null &&
@@ -512,7 +486,7 @@ export function scoreScreenFeatures(
     features.topBuyersHolderCount > 0
   ) {
     riskPenalty +=
-      clamp(features.topBuyersSoldCount / features.topBuyersHolderCount, 0, 1) * 10;
+      clamp(features.topBuyersSoldCount / features.topBuyersHolderCount, 0, 1) * 6;
   }
   if (
     features.topBuyersSoldPartCount !== null &&
@@ -520,7 +494,13 @@ export function scoreScreenFeatures(
     features.topBuyersHolderCount > 0
   ) {
     riskPenalty +=
-      clamp(features.topBuyersSoldPartCount / features.topBuyersHolderCount, 0, 1) * 6;
+      clamp(features.topBuyersSoldPartCount / features.topBuyersHolderCount, 0, 1) * 4;
+  }
+  if (
+    features.topBuyersHoldingRate !== null &&
+    features.topBuyersHoldingRate > 0.08
+  ) {
+    flowScore += clamp(features.topBuyersHoldingRate / 0.2, 0, 1) * 6;
   }
   if (features.buyTax !== null && features.buyTax > 0) {
     riskPenalty += clamp(features.buyTax / 10, 0, 1.5) * 10;
@@ -666,13 +646,13 @@ export function scoreScreenFeatures(
   if (rejectReasons.length > 0) {
     verdict = "reject";
   } else if (finalScore >= config.strongScoreThreshold) {
-    verdict = "strong-structure";
+    verdict = "runner-candidate";
   } else if (finalScore >= config.tradeableScoreThreshold) {
     verdict = "tradeable";
   } else if (finalScore >= config.watchScoreThreshold) {
     verdict = "watch";
   } else if (finalScore >= config.highRiskScoreThreshold) {
-    verdict = "high-risk-momentum";
+    verdict = "scalp-only";
   }
 
   return {
