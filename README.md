@@ -38,6 +38,8 @@ npm install
 - Optional: `PIPELINE_SUMMARY_EVERY_TICKS` (default `20`, set `0` to disable)
 - Optional: `GMGN_RETRY_COUNT` (default `5`)
 - Optional: `GMGN_RETRY_DELAY_MS` (default `2500`)
+- Optional: `ENABLE_GMGN_TRENDING` (default `false`, enables Phase 3 skeleton poller)
+- Optional: `GMGN_TRENDING_INTERVAL_MS` (default `60000`)
 - Optional: `GMGN_QUOTE_WALLET` (wallet id used in GMGN quotation endpoint path)
 
 3. Run:
@@ -53,7 +55,9 @@ npm run dev
 - Migration detection is currently migration-only (`migrate` signal in logs/instructions).
 - BONK.fun Raydium LaunchLab migrations are extracted directly from the migration instruction mint account, which avoids false candidates from LP/NFT mints in the same tx.
 - Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
-- Alerts now surface source context (for example Pump.fun vs BONK.fun vs Meteora Curve) using GMGN launchpad metadata when available.
+- Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
+- Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
+- Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
 - Tokens with `launchpad_platform = pump_mayhem` are ignored.
 - Hard security gate: token is ignored unless `renounced_mint=true` and `renounced_freeze_account=true`.
