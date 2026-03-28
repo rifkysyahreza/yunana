@@ -120,6 +120,7 @@ const deferredVolumeCandidates = new Map<
   string,
   { signature: string; migratedTimestamp: number }
 >();
+const loggedSecurityNotReadyMints = new Set<string>();
 const inFlightMints = new Set<string>();
 let isScanTickRunning = false;
 let telegramUpdateOffset = 0;
@@ -270,9 +271,11 @@ async function processMintCandidate(
       signature,
       migratedTimestamp: migratedTimestampHint ?? 0,
     });
-    logPipeline("defer", "security", mint, "security_data_not_ready");
+    logDeferredSecurityNotReady(mint);
     return;
   }
+  clearDeferredSecurityNotReady(mint);
+
   if (
     securityInfo?.renounced_mint === false ||
     securityInfo?.renounced_freeze_account === false
@@ -433,6 +436,18 @@ function logPipeline(
   pipelineCounters.set(key, (pipelineCounters.get(key) ?? 0) + 1);
   const suffix = details ? ` ${details}` : "";
   console.log(`[${action}] ${mint} stage=${stage} reason=${reason}${suffix}`);
+}
+
+function logDeferredSecurityNotReady(mint: string): void {
+  if (loggedSecurityNotReadyMints.has(mint)) {
+    return;
+  }
+  loggedSecurityNotReadyMints.add(mint);
+  logPipeline("defer", "security", mint, "security_data_not_ready");
+}
+
+function clearDeferredSecurityNotReady(mint: string): void {
+  loggedSecurityNotReadyMints.delete(mint);
 }
 
 function maybePrintPipelineSummary(): void {
@@ -733,6 +748,7 @@ async function sendTelegramAlert(
   const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
   const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
   const gmgnLink = `https://gmgn.ai/sol/token/${mint}`;
+  const bubbleMapLink = `https://v2.bubblemaps.io/map?address=${mint}&chain=solana`;
   const dlmmLink =
     dlmmPoolAddress !== "None"
       ? `https://app.meteora.ag/dlmm/${dlmmPoolAddress}`
@@ -742,12 +758,15 @@ async function sendTelegramAlert(
       ? `https://app.meteora.ag/dammv2/${dammV2PoolAddress}`
       : null;
 
-  const quickActions = [`<a href="${gmgnLink}">GMGN</a>`];
+  const quickActions = [
+    `<a href="${gmgnLink}">GMG</a>`,
+    `<a href="${bubbleMapLink}">BBLMP</a>`,
+  ];
   if (dlmmLink) {
-    quickActions.push(`<a href="${dlmmLink}">Meteora DLMM</a>`);
+    quickActions.push(`<a href="${dlmmLink}">DLMM</a>`);
   }
   if (dammV2Link) {
-    quickActions.push(`<a href="${dammV2Link}">Meteora DAMMV2</a>`);
+    quickActions.push(`<a href="${dammV2Link}">DAMMV2</a>`);
   }
 
   const text = [
@@ -765,8 +784,7 @@ async function sendTelegramAlert(
     `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
     `DAMMV2 Pool: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
     "",
-    "<u>Quick Action</u>",
-    ...quickActions,
+    `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
   ].join("\n");
 
   const payloadBase = {
