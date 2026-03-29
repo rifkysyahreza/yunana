@@ -1034,6 +1034,7 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
   );
   const bonkMint = extractBonkMigrationMint(instructions);
   if (bonkMint) {
+    console.log(`[extract] bonk explicit mint=${bonkMint}`);
     return [bonkMint];
   }
   if (hasBonkMigrationProgram) {
@@ -1046,6 +1047,7 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
   );
   const meteoraCurveMint = extractMeteoraCurveMigrationMint(instructions);
   if (meteoraCurveMint) {
+    console.log(`[extract] meteora_curve explicit mint=${meteoraCurveMint}`);
     return [meteoraCurveMint];
   }
   if (hasMeteoraCurveMigrationProgram) {
@@ -1061,7 +1063,11 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     mints.add(b.mint);
   }
 
-  return Array.from(mints);
+  const fallbackMints = Array.from(mints);
+  if (fallbackMints.length > 0) {
+    console.log(`[extract] fallback postTokenBalances mints=${fallbackMints.join(",")}`);
+  }
+  return fallbackMints;
 }
 
 function extractBonkMigrationMint(
