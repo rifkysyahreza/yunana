@@ -1724,6 +1724,9 @@ async function sendTelegramPhotoWithFallback(
     const form = new FormData();
     form.append("chat_id", payloadBase.chat_id);
     form.append("parse_mode", payloadBase.parse_mode);
+    if (payloadBase.message_thread_id !== undefined) {
+      form.append("message_thread_id", String(payloadBase.message_thread_id));
+    }
     form.append("caption", caption);
     form.append(
       "photo",
