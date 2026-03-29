@@ -28,6 +28,8 @@ npm install
 - `HELIUS_API_KEY`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
+- Optional: `TELEGRAM_MIGRATION_THREAD_ID` (Telegram forum topic id for migration alerts)
+- Optional: `TELEGRAM_TRENDING_THREAD_ID` (Telegram forum topic id for GMGN trending alerts)
 - `WATCH_ADDRESSES` (comma-separated Solana addresses to monitor)
 - Optional: `WATCH_PROGRAM_IDS` (comma-separated program IDs for stronger bonding/migration filtering)
 - Optional: `SCAN_INTERVAL_MS` (default `15000`)
@@ -56,6 +58,7 @@ npm run dev
 - BONK.fun Raydium LaunchLab migrations are extracted directly from the migration instruction mint account, which avoids false candidates from LP/NFT mints in the same tx.
 - Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
 - Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
+- If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration and trending alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID` and `TELEGRAM_TRENDING_THREAD_ID`.
 - Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
 - Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
