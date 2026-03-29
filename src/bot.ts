@@ -90,7 +90,13 @@ type MeteoraPoolType = "dlmm" | "damm_v2";
 type AlertKind = "migration" | "gmgn_trending";
 type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
 type PipelineAction = "defer" | "skip" | "pass" | "alert";
-type PipelineStage = "launchpad" | "security" | "timestamp" | "volume" | "ratio" | "alert";
+type PipelineStage =
+  | "launchpad"
+  | "security"
+  | "timestamp"
+  | "volume"
+  | "ratio"
+  | "alert";
 
 const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
@@ -143,7 +149,8 @@ const METEORA_SEARCH_URL =
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const BONK_MIGRATION_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
 const BONK_MIGRATION_MINT_ACCOUNT_INDEX = 1;
-const METEORA_CURVE_MIGRATION_PROGRAM_ID = "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
+const METEORA_CURVE_MIGRATION_PROGRAM_ID =
+  "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 const METEORA_CURVE_MIGRATION_MINT_ACCOUNT_INDEX = 13;
 
 if (WATCH_ADDRESSES.length === 0) {
@@ -176,7 +183,9 @@ async function main(): Promise<void> {
     `[boot] ratio gate sol_per_10k_mc=${MIN_SOL_PER_10K_MC}..${MAX_SOL_PER_10K_MC}`,
   );
   console.log(`[boot] volume gate 2x1m avg >= ${MIN_TWO_CANDLE_AVG_VOLUME}`);
-  console.log(`[boot] pipeline summary every ${PIPELINE_SUMMARY_EVERY_TICKS} ticks`);
+  console.log(
+    `[boot] pipeline summary every ${PIPELINE_SUMMARY_EVERY_TICKS} ticks`,
+  );
   console.log(
     `[boot] gmgn trending enabled=${ENABLE_GMGN_TRENDING} interval=${GMGN_TRENDING_INTERVAL_MS}ms`,
   );
@@ -215,7 +224,15 @@ async function scanTick(): Promise<void> {
     for (const address of WATCH_ADDRESSES) {
       await scanAddress(address);
     }
-    if (ENABLE_GMGN_TRENDING && tickCounter % Math.max(1, Math.round(GMGN_TRENDING_INTERVAL_MS / SCAN_INTERVAL_MS)) === 0) {
+    if (
+      ENABLE_GMGN_TRENDING &&
+      tickCounter %
+        Math.max(
+          1,
+          Math.round(GMGN_TRENDING_INTERVAL_MS / SCAN_INTERVAL_MS),
+        ) ===
+        0
+    ) {
       await processTrendingTick();
     }
     tickCounter += 1;
@@ -320,181 +337,182 @@ async function processMintCandidate(
   }
   inFlightMints.add(mint);
   try {
-  const [gmgn, launchpadInfo, securityInfo, quotedMarketCap] =
-    await Promise.all([
-      fetchGmgnTokenWithRetry(mint),
-      fetchGmgnLaunchpadInfo(mint),
-      fetchGmgnTokenSecurity(mint),
-      fetchGmgnQuoteMarketCap(mint),
-    ]);
-  const launchSource = classifyLaunchSource(gmgn, launchpadInfo);
+    const [gmgn, launchpadInfo, securityInfo, quotedMarketCap] =
+      await Promise.all([
+        fetchGmgnTokenWithRetry(mint),
+        fetchGmgnLaunchpadInfo(mint),
+        fetchGmgnTokenSecurity(mint),
+        fetchGmgnQuoteMarketCap(mint),
+      ]);
+    const launchSource = classifyLaunchSource(gmgn, launchpadInfo);
 
-  if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
-    deferredVolumeCandidates.delete(mint);
-    deferredVolumeMints.delete(mint);
-    logPipeline("skip", "launchpad", mint, "launchpad_platform_pump_mayhem");
-    return;
-  }
-  const hasSecurityFlags =
-    typeof securityInfo?.renounced_mint === "boolean" &&
-    typeof securityInfo?.renounced_freeze_account === "boolean";
-  if (!hasSecurityFlags) {
-    deferredVolumeCandidates.set(mint, {
-      signature,
-      migratedTimestamp: migratedTimestampHint ?? 0,
-    });
-    logDeferredSecurityNotReady(mint);
-    return;
-  }
-  clearDeferredSecurityNotReady(mint);
+    if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
+      deferredVolumeCandidates.delete(mint);
+      deferredVolumeMints.delete(mint);
+      logPipeline("skip", "launchpad", mint, "launchpad_platform_pump_mayhem");
+      return;
+    }
+    const hasSecurityFlags =
+      typeof securityInfo?.renounced_mint === "boolean" &&
+      typeof securityInfo?.renounced_freeze_account === "boolean";
+    if (!hasSecurityFlags) {
+      deferredVolumeCandidates.set(mint, {
+        signature,
+        migratedTimestamp: migratedTimestampHint ?? 0,
+      });
+      logDeferredSecurityNotReady(mint);
+      return;
+    }
+    clearDeferredSecurityNotReady(mint);
 
-  if (
-    securityInfo?.renounced_mint === false ||
-    securityInfo?.renounced_freeze_account === false
-  ) {
-    deferredVolumeCandidates.delete(mint);
-    deferredVolumeMints.delete(mint);
-    logPipeline(
-      "skip",
-      "security",
-      mint,
-      "renounce_gate_failed",
-      `renounced_mint=${String(securityInfo?.renounced_mint)} renounced_freeze_account=${String(securityInfo?.renounced_freeze_account)}`,
-    );
-    return;
-  }
-
-  const migratedTimestamp =
-    toNumber(launchpadInfo?.migrated_timestamp) ??
-    toNumber(gmgn?.migrated_timestamp) ??
-    migratedTimestampHint;
-  if (!migratedTimestamp) {
-    deferredVolumeCandidates.delete(mint);
-    deferredVolumeMints.delete(mint);
-    logPipeline("skip", "timestamp", mint, "missing_migrated_timestamp");
-    return;
-  }
-
-  const twoCandleVolume = await fetchTwoCandleAverageVolume(
-    mint,
-    migratedTimestamp,
-  );
-  if (twoCandleVolume.status !== "ok") {
-    deferredVolumeMints.add(mint);
-    deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
-    if (source === "new") {
+    if (
+      securityInfo?.renounced_mint === false ||
+      securityInfo?.renounced_freeze_account === false
+    ) {
+      deferredVolumeCandidates.delete(mint);
+      deferredVolumeMints.delete(mint);
       logPipeline(
-        "defer",
+        "skip",
+        "security",
+        mint,
+        "renounce_gate_failed",
+        `renounced_mint=${String(securityInfo?.renounced_mint)} renounced_freeze_account=${String(securityInfo?.renounced_freeze_account)}`,
+      );
+      return;
+    }
+
+    const migratedTimestamp =
+      toNumber(launchpadInfo?.migrated_timestamp) ??
+      toNumber(gmgn?.migrated_timestamp) ??
+      migratedTimestampHint;
+    if (!migratedTimestamp) {
+      deferredVolumeCandidates.delete(mint);
+      deferredVolumeMints.delete(mint);
+      logPipeline("skip", "timestamp", mint, "missing_migrated_timestamp");
+      return;
+    }
+
+    const twoCandleVolume = await fetchTwoCandleAverageVolume(
+      mint,
+      migratedTimestamp,
+    );
+    if (twoCandleVolume.status !== "ok") {
+      deferredVolumeMints.add(mint);
+      deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
+      if (source === "new") {
+        logPipeline(
+          "defer",
+          "volume",
+          mint,
+          "volume_waiting",
+          `reason=${twoCandleVolume.reason}`,
+        );
+      }
+      return;
+    }
+    if (deferredVolumeMints.has(mint)) {
+      logPipeline(
+        "pass",
         "volume",
         mint,
-        "volume_waiting",
-        `reason=${twoCandleVolume.reason}`,
+        "volume_ready_after_defer",
+        `avg=${twoCandleVolume.average.toFixed(2)}`,
       );
     }
-    return;
-  }
-  if (deferredVolumeMints.has(mint)) {
-    logPipeline(
-      "pass",
-      "volume",
-      mint,
-      "volume_ready_after_defer",
-      `avg=${twoCandleVolume.average.toFixed(2)}`,
-    );
-  }
-  if (twoCandleVolume.average < MIN_TWO_CANDLE_AVG_VOLUME) {
-    deferredVolumeCandidates.delete(mint);
-    if (deferredVolumeMints.has(mint)) {
-      deferredVolumeMints.delete(mint);
+    if (twoCandleVolume.average < MIN_TWO_CANDLE_AVG_VOLUME) {
+      deferredVolumeCandidates.delete(mint);
+      if (deferredVolumeMints.has(mint)) {
+        deferredVolumeMints.delete(mint);
+        logPipeline(
+          "skip",
+          "volume",
+          mint,
+          "avg_below_threshold_after_defer",
+          `avg=${twoCandleVolume.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
+        );
+        return;
+      }
       logPipeline(
         "skip",
         "volume",
         mint,
-        "avg_below_threshold_after_defer",
+        "avg_below_threshold",
         `avg=${twoCandleVolume.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
       );
       return;
     }
-    logPipeline(
-      "skip",
-      "volume",
-      mint,
-      "avg_below_threshold",
-      `avg=${twoCandleVolume.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
-    );
-    return;
-  }
-  if (deferredVolumeMints.has(mint)) {
-    logPipeline(
-      "pass",
-      "volume",
-      mint,
-      "avg_above_threshold_after_defer",
-      `avg=${twoCandleVolume.average.toFixed(2)}`,
-    );
-  }
-
-  const totalFee = toNumber(gmgn?.total_fee);
-  const marketCap =
-    quotedMarketCap ??
-    toNumber(gmgn?.market_cap) ??
-    toNumber(gmgn?.marketcap) ??
-    toNumber(gmgn?.fdv);
-  if (!FORWARD_ALL_MIGRATED && !passesFeeMarketCapRatio(totalFee, marketCap)) {
-    const solPer10kMc =
-      totalFee !== null &&
-      marketCap !== null &&
-      totalFee > 0 &&
-      marketCap > 0
-        ? (totalFee * 10000) / marketCap
-        : null;
-    deferredVolumeCandidates.delete(mint);
-    deferredVolumeMints.delete(mint);
-    if (solPer10kMc === null) {
+    if (deferredVolumeMints.has(mint)) {
       logPipeline(
-        "skip",
-        "ratio",
+        "pass",
+        "volume",
         mint,
-        "ratio_input_missing",
-      );
-    } else {
-      logPipeline(
-        "skip",
-        "ratio",
-        mint,
-        "sol_per_10k_mc_out_of_range",
-        `value=${solPer10kMc.toFixed(4)} expected=${MIN_SOL_PER_10K_MC}..${MAX_SOL_PER_10K_MC}`,
+        "avg_above_threshold_after_defer",
+        `avg=${twoCandleVolume.average.toFixed(2)}`,
       );
     }
-    return;
-  }
 
-  const [dlmmPool, dammV2Pool] = await Promise.all([
-    searchMeteoraPoolByType(mint, "dlmm"),
-    searchMeteoraPoolByType(mint, "damm_v2"),
-  ]);
-  const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
-  const latestMarketCap = latestQuotedMarketCap ?? marketCap;
-  await sendTelegramAlert(
-    "migration",
-    gmgn,
-    mint,
-    totalFee,
-    latestMarketCap,
-    dlmmPool,
-    dammV2Pool,
-    twoCandleVolume.average,
-    signature,
-    launchSource,
-    launchpadInfo,
-  );
-  deferredVolumeCandidates.delete(mint);
-  if (deferredVolumeMints.has(mint)) {
-    deferredVolumeMints.delete(mint);
-    logPipeline("alert", "alert", mint, "sent_after_defer", `signature=${signature}`);
-  } else {
-    logPipeline("alert", "alert", mint, "sent", `signature=${signature}`);
-  }
+    const totalFee = toNumber(gmgn?.total_fee);
+    const marketCap =
+      quotedMarketCap ??
+      toNumber(gmgn?.market_cap) ??
+      toNumber(gmgn?.marketcap) ??
+      toNumber(gmgn?.fdv);
+    if (
+      !FORWARD_ALL_MIGRATED &&
+      !passesFeeMarketCapRatio(totalFee, marketCap)
+    ) {
+      const solPer10kMc =
+        totalFee !== null && marketCap !== null && totalFee > 0 && marketCap > 0
+          ? (totalFee * 10000) / marketCap
+          : null;
+      deferredVolumeCandidates.delete(mint);
+      deferredVolumeMints.delete(mint);
+      if (solPer10kMc === null) {
+        logPipeline("skip", "ratio", mint, "ratio_input_missing");
+      } else {
+        logPipeline(
+          "skip",
+          "ratio",
+          mint,
+          "sol_per_10k_mc_out_of_range",
+          `value=${solPer10kMc.toFixed(4)} expected=${MIN_SOL_PER_10K_MC}..${MAX_SOL_PER_10K_MC}`,
+        );
+      }
+      return;
+    }
+
+    const [dlmmPool, dammV2Pool] = await Promise.all([
+      searchMeteoraPoolByType(mint, "dlmm"),
+      searchMeteoraPoolByType(mint, "damm_v2"),
+    ]);
+    const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
+    const latestMarketCap = latestQuotedMarketCap ?? marketCap;
+    await sendTelegramAlert(
+      "migration",
+      gmgn,
+      mint,
+      totalFee,
+      latestMarketCap,
+      dlmmPool,
+      dammV2Pool,
+      twoCandleVolume.average,
+      signature,
+      launchSource,
+      launchpadInfo,
+    );
+    deferredVolumeCandidates.delete(mint);
+    if (deferredVolumeMints.has(mint)) {
+      deferredVolumeMints.delete(mint);
+      logPipeline(
+        "alert",
+        "alert",
+        mint,
+        "sent_after_defer",
+        `signature=${signature}`,
+      );
+    } else {
+      logPipeline("alert", "alert", mint, "sent", `signature=${signature}`);
+    }
   } finally {
     inFlightMints.delete(mint);
   }
@@ -571,7 +589,9 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     return [bonkMint];
   }
   if (hasBonkMigrationProgram) {
-    console.log("[extract] bonk migration program matched but mint extraction failed; skipping fallback");
+    console.log(
+      "[extract] bonk migration program matched but mint extraction failed; skipping fallback",
+    );
     return [];
   }
 
@@ -584,7 +604,9 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     return [meteoraCurveMint];
   }
   if (hasMeteoraCurveMigrationProgram) {
-    console.log("[extract] meteora curve migration program matched but mint extraction failed; skipping fallback");
+    console.log(
+      "[extract] meteora curve migration program matched but mint extraction failed; skipping fallback",
+    );
     return [];
   }
 
@@ -598,13 +620,19 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
 
   const fallbackMints = Array.from(mints);
   if (fallbackMints.length > 0) {
-    console.log(`[extract] fallback postTokenBalances mints=${fallbackMints.join(",")}`);
+    console.log(
+      `[extract] fallback postTokenBalances mints=${fallbackMints.join(",")}`,
+    );
   }
   return fallbackMints;
 }
 
 function extractBonkMigrationMint(
-  instructions: Array<{ programId?: string; accounts?: string[]; parsed?: { type?: string } }>,
+  instructions: Array<{
+    programId?: string;
+    accounts?: string[];
+    parsed?: { type?: string };
+  }>,
 ): string | null {
   for (const ix of instructions) {
     if (ix.programId !== BONK_MIGRATION_PROGRAM_ID) {
@@ -619,7 +647,11 @@ function extractBonkMigrationMint(
 }
 
 function extractMeteoraCurveMigrationMint(
-  instructions: Array<{ programId?: string; accounts?: string[]; parsed?: { type?: string } }>,
+  instructions: Array<{
+    programId?: string;
+    accounts?: string[];
+    parsed?: { type?: string };
+  }>,
 ): string | null {
   for (const ix of instructions) {
     if (ix.programId !== METEORA_CURVE_MIGRATION_PROGRAM_ID) {
@@ -635,7 +667,10 @@ function extractMeteoraCurveMigrationMint(
 
 function classifyLaunchSource(
   token: Pick<GmgnToken, "launchpad" | "launchpad_platform"> | null,
-  launchpadInfo: Pick<GmgnMultiToken, "launchpad" | "launchpad_platform"> | null,
+  launchpadInfo: Pick<
+    GmgnMultiToken,
+    "launchpad" | "launchpad_platform"
+  > | null,
 ): LaunchSource {
   const raw = [
     token?.launchpad_platform,
@@ -653,7 +688,11 @@ function classifyLaunchSource(
   if (raw.includes("letsbonk") || raw.includes("bonk")) {
     return "letsbonk";
   }
-  if (raw.includes("pump.fun") || raw.includes("pumpfun") || raw.includes("pump")) {
+  if (
+    raw.includes("pump.fun") ||
+    raw.includes("pumpfun") ||
+    raw.includes("pump")
+  ) {
     return "pumpfun";
   }
   return "unknown";
@@ -974,7 +1013,8 @@ async function sendTrendingTelegramAlert(
     `Volume: ${fmtNum(toNumber(token.volume))}`,
     `Liquidity: ${fmtNum(toNumber(token.liquidity))}`,
     "",
-    `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
+    `<u>Quick Action</u>`,
+    `${quickActions.join(" ● ")}`,
   ].join("\n");
 
   const payloadBase = buildTelegramPayloadBase("gmgn_trending");
@@ -1019,11 +1059,19 @@ async function sendTelegramAlert(
   const gmgnLink = `https://gmgn.ai/sol/token/${mint}`;
   const solscanTxLink = `https://solscan.io/tx/${signature}`;
   const bubbleMapLink = `https://v2.bubblemaps.io/map?address=${mint}&chain=solana`;
-  const title = alertKind === "gmgn_trending" ? "GMGN Trending" : "Token Migration";
+  const title =
+    alertKind === "gmgn_trending" ? "GMGN Trending" : "Token Migration";
   const sourceLabel = formatLaunchSource(launchSource);
   const rawLaunchpad =
-    launchpadInfo?.launchpad_platform ?? token?.launchpad_platform ?? token?.launchpad ?? "Unknown";
-  const rawExchange = launchpadInfo?.exchange ?? token?.exchange ?? token?.pool?.exchange ?? "Unknown";
+    launchpadInfo?.launchpad_platform ??
+    token?.launchpad_platform ??
+    token?.launchpad ??
+    "Unknown";
+  const rawExchange =
+    launchpadInfo?.exchange ??
+    token?.exchange ??
+    token?.pool?.exchange ??
+    "Unknown";
   const dlmmLink =
     dlmmPoolAddress !== "None"
       ? `https://app.meteora.ag/dlmm/${dlmmPoolAddress}`
@@ -1062,7 +1110,8 @@ async function sendTelegramAlert(
     `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
     `DAMMV2 Pool: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
     "",
-    `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
+    `<u>Quick Action</u>`,
+    `${quickActions.join(" ● ")}`,
   ].join("\n");
 
   const payloadBase = buildTelegramPayloadBase(alertKind);
