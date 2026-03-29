@@ -95,6 +95,12 @@ type PipelineStage = "launchpad" | "security" | "timestamp" | "volume" | "ratio"
 const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
+const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
+  process.env.TELEGRAM_MIGRATION_THREAD_ID,
+);
+const TELEGRAM_TRENDING_THREAD_ID = parseOptionalNumber(
+  process.env.TELEGRAM_TRENDING_THREAD_ID,
+);
 const BOT_STARTED_AT = Date.now();
 
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS ?? "15000");
@@ -951,10 +957,7 @@ async function sendTrendingTelegramAlert(
     `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
   ].join("\n");
 
-  const payloadBase = {
-    chat_id: TELEGRAM_CHAT_ID,
-    parse_mode: "HTML",
-  };
+  const payloadBase = buildTelegramPayloadBase("gmgn_trending");
 
   const imageUrl = token.logo;
   const res = imageUrl
@@ -1042,10 +1045,7 @@ async function sendTelegramAlert(
     `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
   ].join("\n");
 
-  const payloadBase = {
-    chat_id: TELEGRAM_CHAT_ID,
-    parse_mode: "HTML",
-  };
+  const payloadBase = buildTelegramPayloadBase(alertKind);
 
   const res = token?.banner
     ? await sendTelegramPhotoWithFallback(token.banner, text, payloadBase)
@@ -1071,7 +1071,11 @@ async function sendTelegramAlert(
 async function sendTelegramPhotoWithFallback(
   bannerUrl: string,
   caption: string,
-  payloadBase: { chat_id: string; parse_mode: string },
+  payloadBase: {
+    chat_id: string;
+    parse_mode: string;
+    message_thread_id?: number;
+  },
 ): Promise<Response> {
   try {
     const imageRes = await fetch(bannerUrl, {
@@ -1268,11 +1272,36 @@ async function rpcCall<T>(
   return json.result ?? null;
 }
 
+function buildTelegramPayloadBase(alertKind: AlertKind): {
+  chat_id: string;
+  parse_mode: "HTML";
+  message_thread_id?: number;
+} {
+  const messageThreadId =
+    alertKind === "gmgn_trending"
+      ? TELEGRAM_TRENDING_THREAD_ID
+      : TELEGRAM_MIGRATION_THREAD_ID;
+
+  return {
+    chat_id: TELEGRAM_CHAT_ID,
+    parse_mode: "HTML",
+    ...(messageThreadId !== null ? { message_thread_id: messageThreadId } : {}),
+  };
+}
+
 function splitCsv(input: string | undefined): string[] {
   return (input ?? "")
     .split(",")
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function parseOptionalNumber(input: string | undefined): number | null {
+  if (!input || input.trim() === "") {
+    return null;
+  }
+  const parsed = Number(input);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function toNumber(v: unknown): number | null {
