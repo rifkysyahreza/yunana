@@ -1029,14 +1029,28 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     return [];
   }
 
+  const hasBonkMigrationProgram = instructions.some(
+    (ix) => ix.programId === BONK_MIGRATION_PROGRAM_ID,
+  );
   const bonkMint = extractBonkMigrationMint(instructions);
   if (bonkMint) {
     return [bonkMint];
   }
+  if (hasBonkMigrationProgram) {
+    console.log("[extract] bonk migration program matched but mint extraction failed; skipping fallback");
+    return [];
+  }
 
+  const hasMeteoraCurveMigrationProgram = instructions.some(
+    (ix) => ix.programId === METEORA_CURVE_MIGRATION_PROGRAM_ID,
+  );
   const meteoraCurveMint = extractMeteoraCurveMigrationMint(instructions);
   if (meteoraCurveMint) {
     return [meteoraCurveMint];
+  }
+  if (hasMeteoraCurveMigrationProgram) {
+    console.log("[extract] meteora curve migration program matched but mint extraction failed; skipping fallback");
+    return [];
   }
 
   const mints = new Set<string>();
