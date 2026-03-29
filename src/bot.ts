@@ -1038,7 +1038,9 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     return [bonkMint];
   }
   if (hasBonkMigrationProgram) {
-    console.log("[extract] bonk migration program matched but mint extraction failed; skipping fallback");
+    console.log(
+      "[extract] bonk migration program matched but mint extraction failed; skipping fallback",
+    );
     return [];
   }
 
@@ -1051,7 +1053,9 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
     return [meteoraCurveMint];
   }
   if (hasMeteoraCurveMigrationProgram) {
-    console.log("[extract] meteora curve migration program matched but mint extraction failed; skipping fallback");
+    console.log(
+      "[extract] meteora curve migration program matched but mint extraction failed; skipping fallback",
+    );
     return [];
   }
 
@@ -1065,7 +1069,9 @@ function extractMigratedMints(tx: ParsedTransaction): string[] {
 
   const fallbackMints = Array.from(mints);
   if (fallbackMints.length > 0) {
-    console.log(`[extract] fallback postTokenBalances mints=${fallbackMints.join(",")}`);
+    console.log(
+      `[extract] fallback postTokenBalances mints=${fallbackMints.join(",")}`,
+    );
   }
   return fallbackMints;
 }
@@ -1696,7 +1702,8 @@ async function sendTelegramAlert(
     `DLMM: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
     `DAMMV2: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
     "",
-    `<u>Quick Action</u> ${quickActions.join(" ● ")}`,
+    `<u>Quick Action</u>`,
+    `${quickActions.join(" ● ")}`,
   ].join("\n");
 
   const payloadBase = buildTelegramPayloadBase(alertKind);
