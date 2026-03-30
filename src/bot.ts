@@ -1970,7 +1970,6 @@ async function sendLpWalletTrackerAlert(
     `Pool: ${escapeHtml(position.pairLabel ?? "Unknown")}`,
     `Value: ${formatLpValue(position)}`,
     `Range: ${formatLpRange(position)}`,
-    `Strategy: ${escapeHtml(position.strategy ?? "Unknown")}`,
     `Position: <code>${escapeHtml(position.positionAddress)}</code>`,
     `DLMM Pool: <code>${escapeHtml(position.poolAddress)}</code>`,
     "",
