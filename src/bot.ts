@@ -127,6 +127,8 @@ type DlmmPnlApiPosition = {
   tokenYSymbol?: string;
   tokenXMint?: string;
   tokenYMint?: string;
+  mintX?: string;
+  mintY?: string;
   lowerBinId?: number;
   upperBinId?: number;
   poolActiveBinId?: number;
@@ -138,8 +140,8 @@ type DlmmPnlApiPosition = {
   priceUpper?: string | number;
   minPrice?: string | number;
   maxPrice?: string | number;
-  tokenX?: { symbol?: string };
-  tokenY?: { symbol?: string };
+  tokenX?: { symbol?: string; address?: string; mint?: string };
+  tokenY?: { symbol?: string; address?: string; mint?: string };
   unrealizedPnl?: {
     balances?: string | number;
   };
@@ -1127,8 +1129,8 @@ async function fetchDlmmWalletPoolPositions(
     }
     const tokenXSymbol = row.tokenXSymbol ?? row.tokenX?.symbol ?? "TokenX";
     const tokenYSymbol = row.tokenYSymbol ?? row.tokenY?.symbol ?? "TokenY";
-    const tokenXMint = row.tokenXMint;
-    const tokenYMint = row.tokenYMint;
+    const tokenXMint = row.tokenXMint ?? row.mintX ?? row.tokenX?.address ?? row.tokenX?.mint;
+    const tokenYMint = row.tokenYMint ?? row.mintY ?? row.tokenY?.address ?? row.tokenY?.mint;
     const totalValueUsd =
       toNumber(row.totalValueUsd) ??
       toNumber(row.totalValue) ??
