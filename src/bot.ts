@@ -107,6 +107,39 @@ type TrackedWalletPosition = {
   walletLabel: string;
   positionAddress: string;
   poolAddress: string;
+  pairLabel?: string | null;
+  lowerBinId?: number | null;
+  upperBinId?: number | null;
+  activeBinId?: number | null;
+  totalValueUsd?: number | null;
+  totalValueSol?: number | null;
+  strategy?: string | null;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+};
+
+type DlmmPnlApiPosition = {
+  positionAddress?: string;
+  address?: string;
+  position?: string;
+  tokenXSymbol?: string;
+  tokenYSymbol?: string;
+  lowerBinId?: number;
+  upperBinId?: number;
+  poolActiveBinId?: number;
+  strategy?: string;
+  totalValueUsd?: string | number;
+  totalValue?: string | number;
+  totalPositionValue?: string | number;
+  priceLower?: string | number;
+  priceUpper?: string | number;
+  minPrice?: string | number;
+  maxPrice?: string | number;
+  tokenX?: { symbol?: string };
+  tokenY?: { symbol?: string };
+  unrealizedPnl?: {
+    balances?: string | number;
+  };
 };
 type PipelineAction = "defer" | "skip" | "pass" | "alert";
 type PipelineStage =
@@ -174,6 +207,7 @@ const GMGN_QUOTE_WALLET =
   "HVHAvzNxQUhvTWr5uoNNNfrQYfzcsReUFM4HnZwfeHkQ";
 const METEORA_SEARCH_URL =
   "https://pool-discovery-api.datapi.meteora.ag/search";
+const METEORA_DLMM_PNL_URL = "https://dlmm.datapi.meteora.ag/positions";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const BONK_MIGRATION_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
 const BONK_MIGRATION_MINT_ACCOUNT_INDEX = 1;
@@ -1033,7 +1067,21 @@ async function fetchTrackedWalletPositions(
     });
   }
 
-  return positions;
+  const enrichedByPosition = new Map<string, Partial<TrackedWalletPosition>>();
+  const uniquePools = [...new Set(positions.map((p) => p.poolAddress))];
+  await Promise.all(
+    uniquePools.map(async (poolAddress) => {
+      const pnlByPosition = await fetchDlmmWalletPoolPositions(poolAddress, wallet.address);
+      for (const [positionAddress, detail] of pnlByPosition.entries()) {
+        enrichedByPosition.set(positionAddress, detail);
+      }
+    }),
+  );
+
+  return positions.map((position) => ({
+    ...position,
+    ...(enrichedByPosition.get(position.positionAddress) ?? {}),
+  }));
 }
 
 function buildTrackedWalletPositionKey(
@@ -1041,6 +1089,60 @@ function buildTrackedWalletPositionKey(
   positionAddress: string,
 ): string {
   return `${walletAddress}:${positionAddress}`;
+}
+
+async function fetchDlmmWalletPoolPositions(
+  poolAddress: string,
+  walletAddress: string,
+): Promise<Map<string, Partial<TrackedWalletPosition>>> {
+  const url = new URL(`${METEORA_DLMM_PNL_URL}/${poolAddress}/pnl`);
+  url.searchParams.set("user", walletAddress);
+  url.searchParams.set("status", "open");
+  url.searchParams.set("pageSize", "100");
+  url.searchParams.set("page", "1");
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    return new Map();
+  }
+
+  const json = (await res.json()) as {
+    positions?: DlmmPnlApiPosition[];
+    data?: DlmmPnlApiPosition[];
+  };
+  const rows = Array.isArray(json.positions)
+    ? json.positions
+    : Array.isArray(json.data)
+      ? json.data
+      : [];
+
+  const byPosition = new Map<string, Partial<TrackedWalletPosition>>();
+  for (const row of rows) {
+    const positionAddress = row.positionAddress ?? row.address ?? row.position;
+    if (!positionAddress) {
+      continue;
+    }
+    const tokenXSymbol = row.tokenXSymbol ?? row.tokenX?.symbol ?? "TokenX";
+    const tokenYSymbol = row.tokenYSymbol ?? row.tokenY?.symbol ?? "TokenY";
+    const totalValueUsd =
+      toNumber(row.totalValueUsd) ??
+      toNumber(row.totalValue) ??
+      toNumber(row.totalPositionValue) ??
+      toNumber(row.unrealizedPnl?.balances);
+    const totalValueSol = totalValueUsd !== null ? totalValueUsd / 150 : null;
+    byPosition.set(positionAddress, {
+      pairLabel: `${tokenXSymbol} / ${tokenYSymbol}`,
+      lowerBinId: row.lowerBinId ?? null,
+      upperBinId: row.upperBinId ?? null,
+      activeBinId: row.poolActiveBinId ?? null,
+      totalValueUsd,
+      totalValueSol,
+      strategy: formatLpStrategy(row.strategy),
+      minPrice: toNumber(row.priceLower) ?? toNumber(row.minPrice),
+      maxPrice: toNumber(row.priceUpper) ?? toNumber(row.maxPrice),
+    });
+  }
+  return byPosition;
 }
 
 async function fetchTwoCandleAverageVolume(
@@ -1195,14 +1297,19 @@ async function sendLpWalletTrackerAlert(
   const dlmmLink = `https://app.meteora.ag/dlmm/${position.poolAddress}`;
   const solscanWalletLink = `https://solscan.io/account/${position.walletAddress}`;
   const solscanPositionLink = `https://solscan.io/account/${position.positionAddress}`;
+  const lpAgentLink = `https://app.lpagent.io/portfolio?address=${position.walletAddress}`;
   const text = [
     `<b>LP Wallet Tracker</b>`,
-    `Wallet: <b>${escapeHtml(position.walletLabel)}</b>`,
-    `Wallet Address: <code>${escapeHtml(position.walletAddress)}</code>`,
+    `Wallet: <b>${escapeHtml(position.walletLabel)}</b> (<code>${escapeHtml(shortenAddress(position.walletAddress))}</code>)`,
+    `Pool: ${escapeHtml(position.pairLabel ?? "Unknown")}`,
+    `Value: ${formatLpValue(position)}`,
+    `Range: ${formatLpRange(position)}`,
+    `Strategy: ${escapeHtml(position.strategy ?? "Unknown")}`,
     `Position: <code>${escapeHtml(position.positionAddress)}</code>`,
     `DLMM Pool: <code>${escapeHtml(position.poolAddress)}</code>`,
     "",
-    `<u>Quick Action</u> <a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${solscanPositionLink}">POS</a>`,
+    `<u>Quick Action</u>`,
+    `<a href="${dlmmLink}">DLMM</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${solscanPositionLink}">POS</a> ● <a href="${lpAgentLink}">LPA</a>`,
   ].join("\n");
 
   const payloadBase = buildTelegramPayloadBase("lp_wallet_tracker");
@@ -1609,6 +1716,56 @@ function encodeBase58(bytes: Uint8Array): string {
     result += alphabet[digits[i]];
   }
   return result;
+}
+
+function formatLpValue(position: TrackedWalletPosition): string {
+  if (position.totalValueSol !== null && position.totalValueSol !== undefined) {
+    return `${position.totalValueSol.toFixed(position.totalValueSol >= 10 ? 1 : 2)} SOL`;
+  }
+  if (position.totalValueUsd !== null && position.totalValueUsd !== undefined) {
+    return `$${position.totalValueUsd.toFixed(position.totalValueUsd >= 100 ? 0 : 2)}`;
+  }
+  return "Unknown";
+}
+
+function formatLpRange(position: TrackedWalletPosition): string {
+  if (position.minPrice !== null && position.minPrice !== undefined && position.maxPrice !== null && position.maxPrice !== undefined) {
+    return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}`;
+  }
+  if (position.lowerBinId !== null && position.lowerBinId !== undefined && position.upperBinId !== null && position.upperBinId !== undefined) {
+    return `Bin ${position.lowerBinId} ~ ${position.upperBinId}`;
+  }
+  return "Unknown";
+}
+
+function trimNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "Unknown";
+  }
+  if (value === 0) {
+    return "0";
+  }
+  if (Math.abs(value) >= 1) {
+    return value.toFixed(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  }
+  return value.toPrecision(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+function formatLpStrategy(strategy: string | null | undefined): string | null {
+  if (!strategy) {
+    return null;
+  }
+  const normalized = strategy.toLowerCase();
+  if (normalized.includes("bid") && normalized.includes("ask")) {
+    return "BA";
+  }
+  if (normalized.includes("spot")) {
+    return "Spot";
+  }
+  if (normalized.includes("curve")) {
+    return "Curve";
+  }
+  return strategy;
 }
 
 function toNumber(v: unknown): number | null {
