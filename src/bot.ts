@@ -1666,10 +1666,17 @@ async function fetchDlmmWalletPoolPositions(
       : [];
 
   const byPosition = new Map<string, Partial<TrackedWalletPosition>>();
+  let didLogRawPayload = false;
   for (const row of rows) {
     const positionAddress = row.positionAddress ?? row.address ?? row.position;
     if (!positionAddress) {
       continue;
+    }
+    if (!didLogRawPayload) {
+      console.log(
+        `[lp-wallet-debug] pool=${poolAddress} wallet=${walletAddress} position=${positionAddress} raw=${JSON.stringify(row)}`,
+      );
+      didLogRawPayload = true;
     }
     const tokenXSymbol = row.tokenXSymbol ?? row.tokenX?.symbol ?? "TokenX";
     const tokenYSymbol = row.tokenYSymbol ?? row.tokenY?.symbol ?? "TokenY";
