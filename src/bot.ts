@@ -211,6 +211,7 @@ type TrackedWalletPosition = {
   strategy?: string | null;
   minPrice?: number | null;
   maxPrice?: number | null;
+  gmgTokenMint?: string | null;
 };
 
 type DlmmPnlApiPosition = {
@@ -219,6 +220,8 @@ type DlmmPnlApiPosition = {
   position?: string;
   tokenXSymbol?: string;
   tokenYSymbol?: string;
+  tokenXMint?: string;
+  tokenYMint?: string;
   lowerBinId?: number;
   upperBinId?: number;
   poolActiveBinId?: number;
@@ -1668,12 +1671,15 @@ async function fetchDlmmWalletPoolPositions(
     }
     const tokenXSymbol = row.tokenXSymbol ?? row.tokenX?.symbol ?? "TokenX";
     const tokenYSymbol = row.tokenYSymbol ?? row.tokenY?.symbol ?? "TokenY";
+    const tokenXMint = row.tokenXMint;
+    const tokenYMint = row.tokenYMint;
     const totalValueUsd =
       toNumber(row.totalValueUsd) ??
       toNumber(row.totalValue) ??
       toNumber(row.totalPositionValue) ??
       toNumber(row.unrealizedPnl?.balances);
     const totalValueSol = totalValueUsd !== null ? totalValueUsd / 150 : null;
+    const gmgTokenMint = pickGmgTokenMint(tokenXMint, tokenYMint);
     byPosition.set(positionAddress, {
       pairLabel: `${tokenXSymbol} / ${tokenYSymbol}`,
       lowerBinId: row.lowerBinId ?? null,
@@ -1684,6 +1690,7 @@ async function fetchDlmmWalletPoolPositions(
       strategy: formatLpStrategy(row.strategy),
       minPrice: toNumber(row.priceLower) ?? toNumber(row.minPrice),
       maxPrice: toNumber(row.priceUpper) ?? toNumber(row.maxPrice),
+      gmgTokenMint,
     });
   }
   return byPosition;
@@ -1873,7 +1880,9 @@ async function sendTrendingTelegramAlert(
 async function sendLpWalletTrackerAlert(
   position: TrackedWalletPosition,
 ): Promise<void> {
-  const gmgnLink = `https://gmgn.ai/sol/address/${position.walletAddress}`;
+  const gmgnLink = position.gmgTokenMint
+    ? `https://gmgn.ai/sol/token/${position.gmgTokenMint}`
+    : `https://gmgn.ai/sol/address/${position.walletAddress}`;
   const dlmmLink = `https://app.meteora.ag/dlmm/${position.poolAddress}`;
   const solscanWalletLink = `https://solscan.io/account/${position.walletAddress}`;
   const solscanPositionLink = `https://solscan.io/account/${position.positionAddress}`;
@@ -1889,7 +1898,7 @@ async function sendLpWalletTrackerAlert(
     `DLMM Pool: <code>${escapeHtml(position.poolAddress)}</code>`,
     "",
     `<u>Quick Action</u>`,
-    `<a href="${dlmmLink}">DLMM</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${solscanPositionLink}">POS</a> ● <a href="${lpAgentLink}">LPA</a>`,
+    `<a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${solscanPositionLink}">POS</a> ● <a href="${lpAgentLink}">LPA</a>`,
   ].join("\n");
 
   const payloadBase = buildTelegramPayloadBase("lp_wallet_tracker");
@@ -2358,6 +2367,19 @@ function formatLpStrategy(strategy: string | null | undefined): string | null {
     return "Curve";
   }
   return strategy;
+}
+
+function pickGmgTokenMint(
+  tokenXMint: string | undefined,
+  tokenYMint: string | undefined,
+): string | null {
+  if (tokenXMint && tokenXMint !== SOL_MINT) {
+    return tokenXMint;
+  }
+  if (tokenYMint && tokenYMint !== SOL_MINT) {
+    return tokenYMint;
+  }
+  return null;
 }
 
 function toNumber(v: unknown): number | null {
