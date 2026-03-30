@@ -179,6 +179,13 @@ type GmgnMcapCandle = {
 
 type MeteoraPool = {
   pool_address?: string;
+  name?: string;
+  mint_x?: string;
+  mint_y?: string;
+  mint_x_symbol?: string;
+  mint_y_symbol?: string;
+  token_x?: { address?: string; symbol?: string };
+  token_y?: { address?: string; symbol?: string };
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
@@ -209,6 +216,8 @@ type TrackedWalletPosition = {
   totalValueUsd?: number | null;
   totalValueSol?: number | null;
   strategy?: string | null;
+  depositTokenXAmount?: number | null;
+  depositTokenYAmount?: number | null;
   minPrice?: number | null;
   maxPrice?: number | null;
   gmgTokenMint?: string | null;
@@ -237,8 +246,14 @@ type DlmmPnlApiPosition = {
   maxPrice?: string | number;
   tokenX?: { symbol?: string; address?: string; mint?: string };
   tokenY?: { symbol?: string; address?: string; mint?: string };
+  allTimeDeposits?: {
+    tokenX?: { amount?: string | number; usd?: string | number; amountSol?: string | number };
+    tokenY?: { amount?: string | number; usd?: string | number; amountSol?: string | number };
+    total?: { usd?: string | number; sol?: string | number };
+  };
   unrealizedPnl?: {
     balances?: string | number;
+    balancesSol?: string | number;
   };
 };
 type PipelineAction = "defer" | "skip" | "pass" | "alert";
@@ -1640,6 +1655,26 @@ function buildTrackedWalletPositionKey(
   return `${walletAddress}:${positionAddress}`;
 }
 
+async function fetchMeteoraPoolMeta(
+  poolAddress: string,
+): Promise<MeteoraPool | null> {
+  const url = new URL(METEORA_SEARCH_URL);
+  url.searchParams.set("page_size", "20");
+  url.searchParams.set("query", poolAddress);
+  url.searchParams.set("sort_by", "volume_24h:desc,tvl:desc");
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    return null;
+  }
+
+  const json = (await res.json()) as { data?: MeteoraPool[] };
+  const pools = Array.isArray(json.data) ? json.data : [];
+  return (
+    pools.find((pool) => pool.pool_address === poolAddress) ?? pools[0] ?? null
+  );
+}
+
 async function fetchDlmmWalletPoolPositions(
   poolAddress: string,
   walletAddress: string,
@@ -1665,6 +1700,14 @@ async function fetchDlmmWalletPoolPositions(
       ? json.data
       : [];
 
+  const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
+  const poolTokenXSymbol =
+    poolMeta?.mint_x_symbol ?? poolMeta?.token_x?.symbol ?? null;
+  const poolTokenYSymbol =
+    poolMeta?.mint_y_symbol ?? poolMeta?.token_y?.symbol ?? null;
+  const poolTokenXMint = poolMeta?.mint_x ?? poolMeta?.token_x?.address ?? null;
+  const poolTokenYMint = poolMeta?.mint_y ?? poolMeta?.token_y?.address ?? null;
+
   const byPosition = new Map<string, Partial<TrackedWalletPosition>>();
   let didLogRawPayload = false;
   for (const row of rows) {
@@ -1678,17 +1721,32 @@ async function fetchDlmmWalletPoolPositions(
       );
       didLogRawPayload = true;
     }
-    const tokenXSymbol = row.tokenXSymbol ?? row.tokenX?.symbol ?? "TokenX";
-    const tokenYSymbol = row.tokenYSymbol ?? row.tokenY?.symbol ?? "TokenY";
-    const tokenXMint = row.tokenXMint ?? row.mintX ?? row.tokenX?.address ?? row.tokenX?.mint;
-    const tokenYMint = row.tokenYMint ?? row.mintY ?? row.tokenY?.address ?? row.tokenY?.mint;
+    const tokenXSymbol =
+      row.tokenXSymbol ?? row.tokenX?.symbol ?? poolTokenXSymbol ?? "TokenX";
+    const tokenYSymbol =
+      row.tokenYSymbol ?? row.tokenY?.symbol ?? poolTokenYSymbol ?? "TokenY";
+    const tokenXMint =
+      row.tokenXMint ??
+      row.mintX ??
+      row.tokenX?.address ??
+      row.tokenX?.mint ??
+      poolTokenXMint;
+    const tokenYMint =
+      row.tokenYMint ??
+      row.mintY ??
+      row.tokenY?.address ??
+      row.tokenY?.mint ??
+      poolTokenYMint;
     const totalValueUsd =
       toNumber(row.totalValueUsd) ??
       toNumber(row.totalValue) ??
       toNumber(row.totalPositionValue) ??
-      toNumber(row.unrealizedPnl?.balances);
-    const totalValueSol = totalValueUsd !== null ? totalValueUsd / 150 : null;
-    const gmgTokenMint = pickGmgTokenMint(tokenXMint, tokenYMint);
+      toNumber(row.unrealizedPnl?.balances) ??
+      toNumber(row.allTimeDeposits?.total?.usd);
+    const totalValueSol =
+      toNumber(row.unrealizedPnl?.balancesSol) ??
+      toNumber(row.allTimeDeposits?.total?.sol);
+    const gmgTokenMint = pickGmgTokenMint(tokenXMint ?? undefined, tokenYMint ?? undefined);
     byPosition.set(positionAddress, {
       pairLabel: `${tokenXSymbol} / ${tokenYSymbol}`,
       lowerBinId: row.lowerBinId ?? null,
@@ -1696,10 +1754,12 @@ async function fetchDlmmWalletPoolPositions(
       activeBinId: row.poolActiveBinId ?? null,
       totalValueUsd,
       totalValueSol,
-      strategy: formatLpStrategy(row.strategy),
+      strategy: inferLpStrategy(row),
       minPrice: toNumber(row.priceLower) ?? toNumber(row.minPrice),
       maxPrice: toNumber(row.priceUpper) ?? toNumber(row.maxPrice),
       gmgTokenMint,
+      depositTokenXAmount: toNumber(row.allTimeDeposits?.tokenX?.amount),
+      depositTokenYAmount: toNumber(row.allTimeDeposits?.tokenY?.amount),
     });
   }
   return byPosition;
@@ -2376,6 +2436,26 @@ function formatLpStrategy(strategy: string | null | undefined): string | null {
     return "Curve";
   }
   return strategy;
+}
+
+function inferLpStrategy(row: DlmmPnlApiPosition): string | null {
+  const direct = formatLpStrategy(row.strategy);
+  if (direct) {
+    return direct;
+  }
+
+  const depositX = toNumber(row.allTimeDeposits?.tokenX?.amount) ?? 0;
+  const depositY = toNumber(row.allTimeDeposits?.tokenY?.amount) ?? 0;
+  if (depositX === 0 && depositY > 0) {
+    return "BA";
+  }
+  if (depositY === 0 && depositX > 0) {
+    return "Single X";
+  }
+  if (depositX > 0 && depositY > 0) {
+    return "Spot";
+  }
+  return null;
 }
 
 function pickGmgTokenMint(
