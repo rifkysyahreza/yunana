@@ -389,7 +389,7 @@ const pendingOutcomes = new Map<
 const loggedPreCandidateDrops = new Set<string>();
 const loggedSecurityNotReadyMints = new Set<string>();
 const seenTrendingMints = new Map<string, number>();
-const seenLpWalletPositions = new Set<string>();
+const trackedLpWalletPositionKeysByWallet = new Map<string, Set<string>>();
 const inFlightMints = new Set<string>();
 let isScanTickRunning = false;
 let telegramUpdateOffset = 0;
@@ -448,11 +448,13 @@ async function bootstrapTrackedLpWalletPositions(): Promise<void> {
   for (const wallet of LP_TRACKED_WALLETS) {
     try {
       const positions = await fetchTrackedWalletPositions(wallet);
+      const keys = new Set<string>();
       for (const position of positions) {
-        seenLpWalletPositions.add(
+        keys.add(
           buildTrackedWalletPositionKey(position.walletAddress, position.positionAddress),
         );
       }
+      trackedLpWalletPositionKeysByWallet.set(wallet.address, keys);
       console.log(
         `[bootstrap] lp wallet ${wallet.label} (${wallet.address}) positions=${positions.length}`,
       );
@@ -701,20 +703,26 @@ async function processLpWalletTrackerTick(): Promise<void> {
   for (const wallet of LP_TRACKED_WALLETS) {
     try {
       const positions = await fetchTrackedWalletPositions(wallet);
+      const previousKeys =
+        trackedLpWalletPositionKeysByWallet.get(wallet.address) ?? new Set<string>();
+      const currentKeys = new Set<string>();
+
       for (const position of positions) {
         const key = buildTrackedWalletPositionKey(
           position.walletAddress,
           position.positionAddress,
         );
-        if (seenLpWalletPositions.has(key)) {
+        currentKeys.add(key);
+        if (previousKeys.has(key)) {
           continue;
         }
-        seenLpWalletPositions.add(key);
         console.log(
           `[lp-wallet] alert wallet=${position.walletLabel} position=${position.positionAddress} pool=${position.poolAddress}`,
         );
         await sendLpWalletTrackerAlert(position);
       }
+
+      trackedLpWalletPositionKeysByWallet.set(wallet.address, currentKeys);
     } catch (err) {
       console.error(
         `[lp-wallet] tracker error for ${wallet.label} (${wallet.address})`,
