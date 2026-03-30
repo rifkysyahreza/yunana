@@ -14,6 +14,7 @@ Monitors Solana chain activity from now forward, extracts candidate token mints 
    Keep token if `(candle_0_volume + candle_1_volume) / 2 >= MIN_TWO_CANDLE_AVG_VOLUME`.
 5. Search Meteora DLMM pool.
 6. Send Telegram message.
+7. Optional: track labeled Solana wallets and alert when they open a new Meteora DLMM position.
 
 ## Setup
 
@@ -30,9 +31,13 @@ npm install
 - `TELEGRAM_CHAT_ID`
 - Optional: `TELEGRAM_MIGRATION_THREAD_ID` (Telegram forum topic id for migration alerts)
 - Optional: `TELEGRAM_TRENDING_THREAD_ID` (Telegram forum topic id for GMGN trending alerts)
+- Optional: `TELEGRAM_LP_WALLET_THREAD_ID` (Telegram forum topic id for LP wallet tracker alerts)
 - `WATCH_ADDRESSES` (comma-separated Solana addresses to monitor)
 - Optional: `WATCH_PROGRAM_IDS` (comma-separated program IDs for stronger bonding/migration filtering)
 - Optional: `SCAN_INTERVAL_MS` (default `15000`)
+- Optional: `ENABLE_LP_WALLET_TRACKER` (default `false`)
+- Optional: `LP_WALLET_TRACKER_INTERVAL_MS` (default `60000`)
+- Optional: `LP_TRACKED_WALLETS` (comma-separated `label:wallet` entries for DLMM wallet-open alerts)
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
 - Optional: `MAX_SOL_PER_10K_MC` (default `1`)
@@ -58,7 +63,8 @@ npm run dev
 - BONK.fun Raydium LaunchLab migrations are extracted directly from the migration instruction mint account, which avoids false candidates from LP/NFT mints in the same tx.
 - Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
 - Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
-- If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration and trending alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID` and `TELEGRAM_TRENDING_THREAD_ID`.
+- Optional LP wallet tracker: poll labeled Solana wallets and alert when a tracked wallet opens a new Meteora DLMM position.
+- If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration, trending, and LP wallet tracker alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID`, `TELEGRAM_TRENDING_THREAD_ID`, and `TELEGRAM_LP_WALLET_THREAD_ID`.
 - Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
 - Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
