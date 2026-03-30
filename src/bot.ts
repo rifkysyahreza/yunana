@@ -716,6 +716,9 @@ async function processLpWalletTrackerTick(): Promise<void> {
         if (previousKeys.has(key)) {
           continue;
         }
+        console.log(
+          `[lp-wallet] alert wallet=${position.walletLabel} pair=${position.pairLabel ?? "Unknown"} size=${formatLpValue(position)}`,
+        );
         await sendLpWalletTrackerAlert(position);
       }
 
