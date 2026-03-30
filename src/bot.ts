@@ -87,8 +87,27 @@ type MeteoraPool = {
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
-type AlertKind = "migration" | "gmgn_trending";
+type AlertKind = "migration" | "gmgn_trending" | "lp_wallet_tracker";
 type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
+
+type TrackedLpWallet = {
+  address: string;
+  label: string;
+};
+
+type DlmmPositionAccount = {
+  pubkey: string;
+  account: {
+    data?: [string, string] | string;
+  };
+};
+
+type TrackedWalletPosition = {
+  walletAddress: string;
+  walletLabel: string;
+  positionAddress: string;
+  poolAddress: string;
+};
 type PipelineAction = "defer" | "skip" | "pass" | "alert";
 type PipelineStage =
   | "launchpad"
@@ -106,6 +125,9 @@ const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
 );
 const TELEGRAM_TRENDING_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_TRENDING_THREAD_ID,
+);
+const TELEGRAM_LP_WALLET_THREAD_ID = parseOptionalNumber(
+  process.env.TELEGRAM_LP_WALLET_THREAD_ID,
 );
 const BOT_STARTED_AT = Date.now();
 
@@ -129,6 +151,12 @@ const ENABLE_GMGN_TRENDING =
 const GMGN_TRENDING_INTERVAL_MS = Number(
   process.env.GMGN_TRENDING_INTERVAL_MS ?? "60000",
 );
+const ENABLE_LP_WALLET_TRACKER =
+  (process.env.ENABLE_LP_WALLET_TRACKER ?? "false").toLowerCase() === "true";
+const LP_WALLET_TRACKER_INTERVAL_MS = Number(
+  process.env.LP_WALLET_TRACKER_INTERVAL_MS ?? "60000",
+);
+const LP_TRACKED_WALLETS = parseTrackedLpWallets(process.env.LP_TRACKED_WALLETS);
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
 
@@ -152,6 +180,7 @@ const BONK_MIGRATION_MINT_ACCOUNT_INDEX = 1;
 const METEORA_CURVE_MIGRATION_PROGRAM_ID =
   "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN";
 const METEORA_CURVE_MIGRATION_MINT_ACCOUNT_INDEX = 13;
+const METEORA_DLMM_PROGRAM_ID = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
 
 if (WATCH_ADDRESSES.length === 0) {
   throw new Error(
@@ -168,6 +197,7 @@ const deferredVolumeCandidates = new Map<
 >();
 const loggedSecurityNotReadyMints = new Set<string>();
 const seenTrendingMints = new Map<string, number>();
+const seenLpWalletPositions = new Set<string>();
 const inFlightMints = new Set<string>();
 let isScanTickRunning = false;
 let telegramUpdateOffset = 0;
@@ -189,6 +219,9 @@ async function main(): Promise<void> {
   console.log(
     `[boot] gmgn trending enabled=${ENABLE_GMGN_TRENDING} interval=${GMGN_TRENDING_INTERVAL_MS}ms`,
   );
+  console.log(
+    `[boot] lp wallet tracker enabled=${ENABLE_LP_WALLET_TRACKER} interval=${LP_WALLET_TRACKER_INTERVAL_MS}ms wallets=${LP_TRACKED_WALLETS.length}`,
+  );
   if (FORWARD_ALL_MIGRATED) {
     console.log(
       "[boot] ratio filter is DISABLED because FORWARD_ALL_MIGRATED=true",
@@ -196,6 +229,7 @@ async function main(): Promise<void> {
   }
 
   await bootstrapCursors();
+  await bootstrapTrackedLpWalletPositions();
   void startTelegramPingListener();
   setInterval(scanTick, SCAN_INTERVAL_MS);
   await scanTick();
@@ -209,6 +243,31 @@ async function bootstrapCursors(): Promise<void> {
       console.log(`[bootstrap] cursor for ${address} = ${sigs[0].signature}`);
     } else {
       console.log(`[bootstrap] no recent signatures for ${address}`);
+    }
+  }
+}
+
+async function bootstrapTrackedLpWalletPositions(): Promise<void> {
+  if (!ENABLE_LP_WALLET_TRACKER || LP_TRACKED_WALLETS.length === 0) {
+    return;
+  }
+
+  for (const wallet of LP_TRACKED_WALLETS) {
+    try {
+      const positions = await fetchTrackedWalletPositions(wallet);
+      for (const position of positions) {
+        seenLpWalletPositions.add(
+          buildTrackedWalletPositionKey(position.walletAddress, position.positionAddress),
+        );
+      }
+      console.log(
+        `[bootstrap] lp wallet ${wallet.label} (${wallet.address}) positions=${positions.length}`,
+      );
+    } catch (err) {
+      console.error(
+        `[bootstrap] lp wallet tracker failed for ${wallet.label} (${wallet.address})`,
+        err,
+      );
     }
   }
 }
@@ -234,6 +293,18 @@ async function scanTick(): Promise<void> {
         0
     ) {
       await processTrendingTick();
+    }
+    if (
+      ENABLE_LP_WALLET_TRACKER &&
+      LP_TRACKED_WALLETS.length > 0 &&
+      tickCounter %
+        Math.max(
+          1,
+          Math.round(LP_WALLET_TRACKER_INTERVAL_MS / SCAN_INTERVAL_MS),
+        ) ===
+        0
+    ) {
+      await processLpWalletTrackerTick();
     }
     tickCounter += 1;
     maybePrintPipelineSummary();
@@ -323,6 +394,33 @@ async function processTrendingTick(): Promise<void> {
     );
 
     await sendTrendingTelegramAlert(token, launchSource);
+  }
+}
+
+async function processLpWalletTrackerTick(): Promise<void> {
+  for (const wallet of LP_TRACKED_WALLETS) {
+    try {
+      const positions = await fetchTrackedWalletPositions(wallet);
+      for (const position of positions) {
+        const key = buildTrackedWalletPositionKey(
+          position.walletAddress,
+          position.positionAddress,
+        );
+        if (seenLpWalletPositions.has(key)) {
+          continue;
+        }
+        seenLpWalletPositions.add(key);
+        console.log(
+          `[lp-wallet] alert wallet=${position.walletLabel} position=${position.positionAddress} pool=${position.poolAddress}`,
+        );
+        await sendLpWalletTrackerAlert(position);
+      }
+    } catch (err) {
+      console.error(
+        `[lp-wallet] tracker error for ${wallet.label} (${wallet.address})`,
+        err,
+      );
+    }
   }
 }
 
@@ -896,6 +994,55 @@ async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   return toNumber(json.data?.market_cap);
 }
 
+async function fetchTrackedWalletPositions(
+  wallet: TrackedLpWallet,
+): Promise<TrackedWalletPosition[]> {
+  const accounts = await rpcCall<DlmmPositionAccount[]>("getProgramAccounts", [
+    METEORA_DLMM_PROGRAM_ID,
+    {
+      encoding: "base64",
+      filters: [{ memcmp: { offset: 40, bytes: wallet.address } }],
+    },
+  ]);
+
+  const positions: TrackedWalletPosition[] = [];
+  for (const account of accounts ?? []) {
+    const rawData = Array.isArray(account.account?.data)
+      ? account.account.data[0]
+      : null;
+    if (!rawData) {
+      continue;
+    }
+
+    let decoded: Buffer;
+    try {
+      decoded = Buffer.from(rawData, "base64");
+    } catch {
+      continue;
+    }
+    if (decoded.length < 40) {
+      continue;
+    }
+
+    const poolAddress = encodeBase58(decoded.subarray(8, 40));
+    positions.push({
+      walletAddress: wallet.address,
+      walletLabel: wallet.label,
+      positionAddress: account.pubkey,
+      poolAddress,
+    });
+  }
+
+  return positions;
+}
+
+function buildTrackedWalletPositionKey(
+  walletAddress: string,
+  positionAddress: string,
+): string {
+  return `${walletAddress}:${positionAddress}`;
+}
+
 async function fetchTwoCandleAverageVolume(
   mint: string,
   migratedTimestampSec: number,
@@ -1038,6 +1185,43 @@ async function sendTrendingTelegramAlert(
   if (!res.ok) {
     const body = await res.text();
     console.error("[telegram] trending send failed", body);
+  }
+}
+
+async function sendLpWalletTrackerAlert(
+  position: TrackedWalletPosition,
+): Promise<void> {
+  const gmgnLink = `https://gmgn.ai/sol/address/${position.walletAddress}`;
+  const dlmmLink = `https://app.meteora.ag/dlmm/${position.poolAddress}`;
+  const solscanWalletLink = `https://solscan.io/account/${position.walletAddress}`;
+  const solscanPositionLink = `https://solscan.io/account/${position.positionAddress}`;
+  const text = [
+    `<b>LP Wallet Tracker</b>`,
+    `Wallet: <b>${escapeHtml(position.walletLabel)}</b>`,
+    `Wallet Address: <code>${escapeHtml(position.walletAddress)}</code>`,
+    `Position: <code>${escapeHtml(position.positionAddress)}</code>`,
+    `DLMM Pool: <code>${escapeHtml(position.poolAddress)}</code>`,
+    "",
+    `<u>Quick Action</u> <a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${solscanPositionLink}">POS</a>`,
+  ].join("\n");
+
+  const payloadBase = buildTelegramPayloadBase("lp_wallet_tracker");
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payloadBase,
+        text,
+        disable_web_page_preview: true,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`telegram lp wallet tracker send failed: ${res.status} ${body}`);
   }
 }
 
@@ -1352,7 +1536,9 @@ function buildTelegramPayloadBase(alertKind: AlertKind): {
   const messageThreadId =
     alertKind === "gmgn_trending"
       ? TELEGRAM_TRENDING_THREAD_ID
-      : TELEGRAM_MIGRATION_THREAD_ID;
+      : alertKind === "lp_wallet_tracker"
+        ? TELEGRAM_LP_WALLET_THREAD_ID
+        : TELEGRAM_MIGRATION_THREAD_ID;
 
   return {
     chat_id: TELEGRAM_CHAT_ID,
@@ -1368,12 +1554,61 @@ function splitCsv(input: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
+  return splitCsv(input).flatMap((entry) => {
+    const idx = entry.indexOf(":");
+    if (idx === -1) {
+      const address = entry.trim();
+      return address ? [{ address, label: shortenAddress(address) }] : [];
+    }
+    const label = entry.slice(0, idx).trim();
+    const address = entry.slice(idx + 1).trim();
+    if (!address) {
+      return [];
+    }
+    return [{
+      address,
+      label: label || shortenAddress(address),
+    }];
+  });
+}
+
 function parseOptionalNumber(input: string | undefined): number | null {
   if (!input || input.trim() === "") {
     return null;
   }
   const parsed = Number(input);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function shortenAddress(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 4)}...${value.slice(-4)}` : value;
+}
+
+function encodeBase58(bytes: Uint8Array): string {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  let digits = [0];
+  for (const byte of bytes) {
+    let carry = byte;
+    for (let i = 0; i < digits.length; i += 1) {
+      const value = digits[i] * 256 + carry;
+      digits[i] = value % 58;
+      carry = Math.floor(value / 58);
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+  let zeroes = 0;
+  while (zeroes < bytes.length && bytes[zeroes] === 0) {
+    zeroes += 1;
+  }
+  let result = "1".repeat(zeroes);
+  for (let i = digits.length - 1; i >= 0; i -= 1) {
+    result += alphabet[digits[i]];
+  }
+  return result;
 }
 
 function toNumber(v: unknown): number | null {
