@@ -184,6 +184,13 @@ type MeteoraPool = {
   mint_y?: string;
   mint_x_symbol?: string;
   mint_y_symbol?: string;
+  bin_step?: string | number;
+  fee_pct?: string | number;
+  base_fee_percentage?: string | number;
+  dlmm_params?: {
+    bin_step?: string | number;
+    base_fee_percentage?: string | number;
+  };
   token_x?: { address?: string; symbol?: string };
   token_y?: { address?: string; symbol?: string };
 };
@@ -210,6 +217,8 @@ type TrackedWalletPosition = {
   positionAddress: string;
   poolAddress: string;
   pairLabel?: string | null;
+  poolBinStep?: number | null;
+  poolFeePct?: number | null;
   lowerBinId?: number | null;
   upperBinId?: number | null;
   activeBinId?: number | null;
@@ -1715,6 +1724,12 @@ async function fetchDlmmWalletPoolPositions(
     poolMeta?.mint_y_symbol ?? poolMeta?.token_y?.symbol ?? null;
   const poolTokenXMint = poolMeta?.mint_x ?? poolMeta?.token_x?.address ?? null;
   const poolTokenYMint = poolMeta?.mint_y ?? poolMeta?.token_y?.address ?? null;
+  const poolBinStep =
+    toNumber(poolMeta?.bin_step) ?? toNumber(poolMeta?.dlmm_params?.bin_step);
+  const poolFeePct =
+    toNumber(poolMeta?.base_fee_percentage) ??
+    toNumber(poolMeta?.fee_pct) ??
+    toNumber(poolMeta?.dlmm_params?.base_fee_percentage);
 
   const byPosition = new Map<string, Partial<TrackedWalletPosition>>();  for (const row of rows) {
     const positionAddress = row.positionAddress ?? row.address ?? row.position;
@@ -1749,6 +1764,8 @@ async function fetchDlmmWalletPoolPositions(
     const gmgTokenMint = pickGmgTokenMint(tokenXMint ?? undefined, tokenYMint ?? undefined);
     byPosition.set(positionAddress, {
       pairLabel: `${tokenXSymbol} / ${tokenYSymbol}`,
+      poolBinStep,
+      poolFeePct,
       lowerBinId: row.lowerBinId ?? null,
       upperBinId: row.upperBinId ?? null,
       activeBinId: row.poolActiveBinId ?? null,
@@ -1960,6 +1977,7 @@ async function sendLpWalletTrackerAlert(
     `<b>LP Wallet Tracker</b>`,
     `Wallet: <b>${escapeHtml(position.walletLabel)}</b> (<code>${escapeHtml(shortenAddress(position.walletAddress))}</code>)`,
     `Pool: ${escapeHtml(position.pairLabel ?? "Unknown")}`,
+    `Pool Bin: ${formatLpPoolBin(position)}`,
     `Value: ${formatLpValue(position)}`,
     `Range: ${formatLpRange(position)}`,
     `Position: <code>${escapeHtml(position.positionAddress)}</code>`,
@@ -2385,6 +2403,17 @@ function encodeBase58(bytes: Uint8Array): string {
     result += alphabet[digits[i]];
   }
   return result;
+}
+
+function formatLpPoolBin(position: TrackedWalletPosition): string {
+  if (position.poolBinStep !== null && position.poolBinStep !== undefined) {
+    const fee =
+      position.poolFeePct !== null && position.poolFeePct !== undefined
+        ? `${trimNumber(position.poolFeePct)}%`
+        : "Unknown";
+    return `${trimNumber(position.poolBinStep)}/${fee}`;
+  }
+  return "Unknown";
 }
 
 function formatLpValue(position: TrackedWalletPosition): string {
