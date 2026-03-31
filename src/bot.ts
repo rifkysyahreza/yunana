@@ -116,6 +116,11 @@ type DlmmPositionAccount = {
   };
 };
 
+type GetProgramAccountsV2Page = {
+  accounts?: DlmmPositionAccount[];
+  cursor?: string | null;
+};
+
 type TrackedWalletPosition = {
   walletAddress: string;
   walletLabel: string;
@@ -1118,16 +1123,10 @@ async function refetchSingleTrackedWalletPosition(
 async function fetchTrackedWalletPositions(
   wallet: TrackedLpWallet,
 ): Promise<TrackedWalletPosition[]> {
-  const accounts = await rpcCall<DlmmPositionAccount[]>("getProgramAccounts", [
-    METEORA_DLMM_PROGRAM_ID,
-    {
-      encoding: "base64",
-      filters: [{ memcmp: { offset: 40, bytes: wallet.address } }],
-    },
-  ]);
+  const accounts = await fetchDlmmPositionAccountsV2(wallet.address);
 
   const positions: TrackedWalletPosition[] = [];
-  for (const account of accounts ?? []) {
+  for (const account of accounts) {
     const rawData = Array.isArray(account.account?.data)
       ? account.account.data[0]
       : null;
@@ -1176,6 +1175,31 @@ function buildTrackedWalletPositionKey(
   positionAddress: string,
 ): string {
   return `${walletAddress}:${positionAddress}`;
+}
+
+async function fetchDlmmPositionAccountsV2(
+  walletAddress: string,
+): Promise<DlmmPositionAccount[]> {
+  const allAccounts: DlmmPositionAccount[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const page: GetProgramAccountsV2Page | null = await rpcCall<GetProgramAccountsV2Page>("getProgramAccountsV2", [
+      METEORA_DLMM_PROGRAM_ID,
+      {
+        encoding: "base64",
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+        filters: [{ memcmp: { offset: 40, bytes: walletAddress } }],
+      },
+    ]);
+
+    const accounts = Array.isArray(page?.accounts) ? page.accounts : [];
+    allAccounts.push(...accounts);
+    cursor = typeof page?.cursor === "string" && page.cursor.length > 0 ? page.cursor : null;
+  } while (cursor);
+
+  return allAccounts;
 }
 
 async function fetchMeteoraPoolMeta(
