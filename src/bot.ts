@@ -726,7 +726,7 @@ async function processLpWalletTrackerTick(): Promise<void> {
           continue;
         }
         console.log(
-          `[lp-wallet] alert wallet=${position.walletLabel} pair=${position.pairLabel ?? "Unknown"} size=${formatLpValue(position)}`,
+          `[lp-wallet] alert wallet=${position.walletLabel} pair=${position.pairLabel ?? "Unknown"} bin=${formatLpPoolBin(position)} size=${formatLpValue(position)}`,
         );
         await sendLpWalletTrackerAlert(position);
       }
@@ -1976,8 +1976,7 @@ async function sendLpWalletTrackerAlert(
   const text = [
     `<b>LP Wallet Tracker</b>`,
     `Wallet: <b>${escapeHtml(position.walletLabel)}</b> (<code>${escapeHtml(shortenAddress(position.walletAddress))}</code>)`,
-    `Pool: ${escapeHtml(position.pairLabel ?? "Unknown")}`,
-    `Pool Bin: ${formatLpPoolBin(position)}`,
+    `Pool: ${escapeHtml(position.pairLabel ?? "Unknown")} (${escapeHtml(formatLpPoolBin(position))})`,
     `Value: ${formatLpValue(position)}`,
     `Range: ${formatLpRange(position)}`,
     `Position: <code>${escapeHtml(position.positionAddress)}</code>`,
