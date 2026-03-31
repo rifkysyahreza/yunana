@@ -37,6 +37,8 @@ npm install
 - Optional: `SCAN_INTERVAL_MS` (default `15000`)
 - Optional: `ENABLE_LP_WALLET_TRACKER` (default `false`)
 - Optional: `LP_WALLET_TRACKER_INTERVAL_MS` (default `60000`)
+- Optional: `LP_WALLET_ENRICHMENT_RETRY_COUNT` (default `3`)
+- Optional: `LP_WALLET_ENRICHMENT_RETRY_DELAY_MS` (default `5000`)
 - Optional: `LP_TRACKED_WALLETS` (comma-separated `label:wallet` entries for DLMM wallet-open alerts)
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
