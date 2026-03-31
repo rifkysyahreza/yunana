@@ -218,6 +218,12 @@ const ENABLE_LP_WALLET_TRACKER =
 const LP_WALLET_TRACKER_INTERVAL_MS = Number(
   process.env.LP_WALLET_TRACKER_INTERVAL_MS ?? "60000",
 );
+const LP_WALLET_ENRICHMENT_RETRY_COUNT = Number(
+  process.env.LP_WALLET_ENRICHMENT_RETRY_COUNT ?? "3",
+);
+const LP_WALLET_ENRICHMENT_RETRY_DELAY_MS = Number(
+  process.env.LP_WALLET_ENRICHMENT_RETRY_DELAY_MS ?? "5000",
+);
 const LP_TRACKED_WALLETS = parseTrackedLpWallets(process.env.LP_TRACKED_WALLETS);
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
@@ -284,6 +290,9 @@ async function main(): Promise<void> {
   );
   console.log(
     `[boot] lp wallet tracker enabled=${ENABLE_LP_WALLET_TRACKER} interval=${LP_WALLET_TRACKER_INTERVAL_MS}ms wallets=${LP_TRACKED_WALLETS.length}`,
+  );
+  console.log(
+    `[boot] lp enrichment retry count=${LP_WALLET_ENRICHMENT_RETRY_COUNT} delay=${LP_WALLET_ENRICHMENT_RETRY_DELAY_MS}ms`,
   );
   if (FORWARD_ALL_MIGRATED) {
     console.log(
@@ -479,10 +488,11 @@ async function processLpWalletTrackerTick(): Promise<void> {
         if (previousKeys.has(key)) {
           continue;
         }
+        const enrichedPosition = await retryLpWalletPositionEnrichment(position);
         console.log(
-          `[lp-wallet] alert wallet=${position.walletLabel} pair=${position.pairLabel ?? "Unknown"} bin=${formatLpPoolBin(position)} size=${formatLpValue(position)}`,
+          `[lp-wallet] alert wallet=${enrichedPosition.walletLabel} pair=${enrichedPosition.pairLabel ?? "Unknown"} bin=${formatLpPoolBin(enrichedPosition)} size=${formatLpValue(enrichedPosition)}`,
         );
-        await sendLpWalletTrackerAlert(position);
+        await sendLpWalletTrackerAlert(enrichedPosition);
       }
 
       trackedLpWalletPositionKeysByWallet.set(wallet.address, currentKeys);
@@ -1063,6 +1073,46 @@ async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
     return null;
   }
   return toNumber(json.data?.market_cap);
+}
+
+async function retryLpWalletPositionEnrichment(
+  position: TrackedWalletPosition,
+): Promise<TrackedWalletPosition> {
+  let current = position;
+  for (let attempt = 0; attempt < Math.max(1, LP_WALLET_ENRICHMENT_RETRY_COUNT); attempt += 1) {
+    if (hasUsefulLpWalletEnrichment(current)) {
+      return current;
+    }
+    if (attempt > 0) {
+      await sleep(LP_WALLET_ENRICHMENT_RETRY_DELAY_MS);
+    }
+    current = await refetchSingleTrackedWalletPosition(current);
+  }
+  return current;
+}
+
+function hasUsefulLpWalletEnrichment(position: TrackedWalletPosition): boolean {
+  return Boolean(
+    position.pairLabel &&
+      position.pairLabel !== "TokenX / TokenY" &&
+      position.pairLabel !== "Unknown",
+  ) ||
+    position.totalValueSol !== null ||
+    position.totalValueUsd !== null ||
+    (position.minPrice !== null && position.maxPrice !== null);
+}
+
+async function refetchSingleTrackedWalletPosition(
+  position: TrackedWalletPosition,
+): Promise<TrackedWalletPosition> {
+  const wallet: TrackedLpWallet = {
+    address: position.walletAddress,
+    label: position.walletLabel,
+  };
+  const positions = await fetchTrackedWalletPositions(wallet);
+  return (
+    positions.find((p) => p.positionAddress === position.positionAddress) ?? position
+  );
 }
 
 async function fetchTrackedWalletPositions(
