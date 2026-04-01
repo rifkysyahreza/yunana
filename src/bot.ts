@@ -2587,7 +2587,11 @@ async function handleEarlyDlmmCommand(
     const bodyLines = result.wallets.length > 0
       ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
       : result.poolResolved
-        ? ["No wallets found."]
+        ? [
+            "No indexed DLMM positions found yet.",
+            "This pool may be very new, or indexed position data may still be catching up.",
+            "Try again shortly.",
+          ]
         : [
             "Could not resolve this as a valid or indexed DLMM pool address.",
             "Please send the actual DLMM pool address or try again later if the pool is very new.",
