@@ -30,6 +30,7 @@ npm install
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - Optional: `TELEGRAM_ALLOWED_USER_ID` (only accept Telegram bot commands from this sender id)
+- Optional: `SHYFT_API_KEY` (required for the `@bot early dlmm <pool_address>` research command)
 - Optional: `TELEGRAM_MIGRATION_THREAD_ID` (Telegram forum topic id for migration alerts)
 - Optional: `TELEGRAM_TRENDING_THREAD_ID` (Telegram forum topic id for GMGN trending alerts)
 - Optional: `TELEGRAM_LP_WALLET_THREAD_ID` (Telegram forum topic id for LP wallet tracker alerts)

@@ -31,6 +31,29 @@ type EarlyDlmmWalletResult = {
   source: string;
 };
 
+type ShyftGraphqlPositionsResponse = {
+  data?: {
+    meteora_dlmm_Position?: Array<{
+      owner?: string;
+      pubkey?: string;
+      createdAt?: string;
+    }>;
+    meteora_dlmm_PositionV2?: Array<{
+      owner?: string;
+      pubkey?: string;
+      createdAt?: string;
+    }>;
+    meteora_dlmm_LbPair?: Array<{
+      pubkey?: string;
+      tokenXMint?: string;
+      tokenYMint?: string;
+      binStep?: string | number;
+      baseFeePercentage?: string | number;
+    }>;
+  };
+  errors?: Array<{ message?: string }>;
+};
+
 type SignatureInfo = {
   signature: string;
   err: unknown;
@@ -322,6 +345,7 @@ const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
 const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "";
+const SHYFT_API_KEY = process.env.SHYFT_API_KEY?.trim() ?? "";
 const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_MIGRATION_THREAD_ID,
 );
@@ -2507,49 +2531,135 @@ async function handleEarlyDlmmCommand(
     messageThreadId,
   );
 
-  const result = await fetchEarlyDlmmWallets(poolAddress);
-  const headerPool = result.pairLabel
-    ? `${result.pairLabel}${result.poolBinLabel ? ` (${result.poolBinLabel})` : ""}`
-    : poolAddress;
-  const lines = [
-    `Early DLMM Wallets`,
-    `Pool: ${headerPool}`,
-    `DLMM Pool: ${result.poolAddress}`,
-    "",
-    ...(result.wallets.length > 0
-      ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
-      : ["No wallets found."]),
-  ];
-  await sendTelegramPlainMessage(chatId, lines.join("\n"), messageThreadId);
+  try {
+    const result = await fetchEarlyDlmmWallets(poolAddress);
+    const headerPool = result.pairLabel
+      ? `${result.pairLabel}${result.poolBinLabel ? ` (${result.poolBinLabel})` : ""}`
+      : poolAddress;
+    const lines = [
+      `Early DLMM Wallets`,
+      `Pool: ${headerPool}`,
+      `DLMM Pool: ${result.poolAddress}`,
+      "",
+      ...(result.wallets.length > 0
+        ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
+        : ["No wallets found."]),
+    ];
+    await sendTelegramPlainMessage(chatId, lines.join("\n"), messageThreadId);
+  } catch (err) {
+    await sendTelegramPlainMessage(
+      chatId,
+      `failed to fetch early DLMM wallets for ${poolAddress}: ${err instanceof Error ? err.message : String(err)}`,
+      messageThreadId,
+    );
+  }
 }
 
 async function fetchEarlyDlmmWallets(
   poolAddress: string,
 ): Promise<EarlyDlmmWalletResult> {
-  const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
+  if (!SHYFT_API_KEY) {
+    throw new Error("missing SHYFT_API_KEY");
+  }
+
+  const query = `
+    query EarlyDlmmWallets {
+      meteora_dlmm_LbPair(where: {pubkey: {_eq: ${JSON.stringify(poolAddress)}}}) {
+        pubkey
+        tokenXMint
+        tokenYMint
+        binStep
+        baseFeePercentage
+      }
+      meteora_dlmm_Position(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
+        owner
+        pubkey
+        createdAt
+      }
+      meteora_dlmm_PositionV2(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
+        owner
+        pubkey
+        createdAt
+      }
+    }
+  `;
+
+  const res = await fetch(
+    `https://programs.shyft.to/v0/graphql/accounts?api_key=${SHYFT_API_KEY}&network=mainnet-beta`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        variables: {},
+        operationName: "EarlyDlmmWallets",
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    throw new Error(`shyft graphql http ${res.status}`);
+  }
+
+  const json = (await res.json()) as ShyftGraphqlPositionsResponse;
+  if (Array.isArray(json.errors) && json.errors.length > 0) {
+    throw new Error(json.errors[0]?.message || "shyft graphql error");
+  }
+
+  const lbPair = json.data?.meteora_dlmm_LbPair?.[0];
+  const positions = [
+    ...(json.data?.meteora_dlmm_Position ?? []),
+    ...(json.data?.meteora_dlmm_PositionV2 ?? []),
+  ];
+
+  const earliestByWallet = new Map<string, number>();
+  for (const position of positions) {
+    const owner = position.owner?.trim();
+    if (!owner) {
+      continue;
+    }
+    const createdAtMs = position.createdAt
+      ? new Date(position.createdAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    const current = earliestByWallet.get(owner);
+    if (current === undefined || createdAtMs < current) {
+      earliestByWallet.set(owner, createdAtMs);
+    }
+  }
+
+  const wallets = [...earliestByWallet.entries()]
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+    .slice(0, 10)
+    .map(([wallet]) => wallet);
+
+  let pairLabel: string | null = null;
+  if (lbPair?.tokenXMint && lbPair?.tokenYMint) {
+    const [tokenX, tokenY] = await Promise.all([
+      fetchGmgnTokenWithRetry(lbPair.tokenXMint),
+      fetchGmgnTokenWithRetry(lbPair.tokenYMint),
+    ]);
+    const sx = tokenX?.symbol ?? shortenAddress(lbPair.tokenXMint);
+    const sy = tokenY?.symbol ?? shortenAddress(lbPair.tokenYMint);
+    pairLabel = `${sx} / ${sy}`;
+  }
+
+  const poolBinLabel = lbPair
+    ? formatLpPoolBin({
+        walletAddress: "",
+        walletLabel: "",
+        positionAddress: "",
+        poolAddress,
+        poolBinStep: toNumber(lbPair.binStep),
+        poolFeePct: toNumber(lbPair.baseFeePercentage),
+      })
+    : null;
+
   return {
-    pairLabel:
-      poolMeta?.mint_x_symbol && poolMeta?.mint_y_symbol
-        ? `${poolMeta.mint_x_symbol} / ${poolMeta.mint_y_symbol}`
-        : poolMeta?.name ?? null,
-    poolBinLabel:
-      poolMeta
-        ? formatLpPoolBin({
-            walletAddress: "",
-            walletLabel: "",
-            positionAddress: "",
-            poolAddress,
-            poolBinStep:
-              toNumber(poolMeta.bin_step) ?? toNumber(poolMeta.dlmm_params?.bin_step),
-            poolFeePct:
-              toNumber(poolMeta.base_fee_percentage) ??
-              toNumber(poolMeta.fee_pct) ??
-              toNumber(poolMeta.dlmm_params?.base_fee_percentage),
-          })
-        : null,
+    pairLabel,
+    poolBinLabel,
     poolAddress,
-    wallets: [],
-    source: "placeholder",
+    wallets,
+    source: "shyft_graphql",
   };
 }
 
