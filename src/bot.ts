@@ -2472,7 +2472,11 @@ async function pollTelegramUpdates(): Promise<void> {
       continue;
     }
     const command = parseTelegramCommand(text);
-    if (!command) {
+    const autoPoolAddress = extractEarlyDlmmPoolAddressFromTopic(
+      text,
+      messageThreadId,
+    );
+    if (!command && !autoPoolAddress) {
       continue;
     }
     if (!isAllowedTelegramUser(senderId)) {
@@ -2483,14 +2487,10 @@ async function pollTelegramUpdates(): Promise<void> {
       );
       continue;
     }
-    if (command.kind === "early_dlmm") {
+    if (command?.kind === "early_dlmm") {
       await handleEarlyDlmmCommand(chatId, command.poolAddress, messageThreadId);
       continue;
     }
-    const autoPoolAddress = extractEarlyDlmmPoolAddressFromTopic(
-      text,
-      messageThreadId,
-    );
     if (autoPoolAddress) {
       await handleEarlyDlmmCommand(chatId, autoPoolAddress, messageThreadId);
     }
