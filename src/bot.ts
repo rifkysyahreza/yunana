@@ -384,7 +384,6 @@ const METEORA_POOL_META_CACHE_TTL_MS = Number(
 );
 const LP_TRACKED_WALLETS_FILE =
   process.env.LP_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-lp-wallets.json");
-const LP_WALLET_STATE_FILE = path.join(process.cwd(), "runtime-data", "lp-wallet-state.json");
 const LP_TRACKED_WALLETS = loadTrackedLpWallets();
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
@@ -493,7 +492,6 @@ async function main(): Promise<void> {
   }
 
   await bootstrapCursors();
-  loadLpWalletTrackerStateFromDisk();
   await bootstrapTrackedLpWalletPositions();
   void startTelegramPingListener();
   setInterval(scanTick, SCAN_INTERVAL_MS);
@@ -534,48 +532,6 @@ function getLpWalletShardForTick(tick: number): TrackedLpWallet[] {
   return ordered.filter((_, idx) => idx % shardCount === shardIndex);
 }
 
-function loadLpWalletTrackerStateFromDisk(): void {
-  try {
-    if (!fs.existsSync(LP_WALLET_STATE_FILE)) {
-      return;
-    }
-    const raw = fs.readFileSync(LP_WALLET_STATE_FILE, "utf8");
-    const parsed = JSON.parse(raw) as LpWalletTrackerStateFile;
-    const wallets = parsed?.wallets ?? {};
-    for (const [walletAddress, state] of Object.entries(wallets)) {
-      trackedLpWalletPositionKeysByWallet.set(
-        walletAddress,
-        new Set(Array.isArray(state.knownPositions) ? state.knownPositions : []),
-      );
-    }
-    console.log(
-      `[bootstrap] loaded lp wallet tracker state from ${LP_WALLET_STATE_FILE}`,
-    );
-  } catch (err) {
-    console.error("[lp-wallet] failed to load tracker state", err);
-  }
-}
-
-function saveLpWalletTrackerStateToDisk(): void {
-  try {
-    fs.mkdirSync(path.dirname(LP_WALLET_STATE_FILE), { recursive: true });
-    const wallets: LpWalletTrackerStateFile["wallets"] = {};
-    for (const [walletAddress, keys] of trackedLpWalletPositionKeysByWallet.entries()) {
-      wallets[walletAddress] = {
-        knownPositions: [...keys],
-      };
-    }
-    const payload: LpWalletTrackerStateFile = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      wallets,
-    };
-    fs.writeFileSync(LP_WALLET_STATE_FILE, JSON.stringify(payload, null, 2));
-  } catch (err) {
-    console.error("[lp-wallet] failed to save tracker state", err);
-  }
-}
-
 async function bootstrapTrackedLpWalletPositions(): Promise<void> {
   if (!ENABLE_LP_WALLET_TRACKER || LP_TRACKED_WALLETS.length === 0) {
     return;
@@ -590,12 +546,7 @@ async function bootstrapTrackedLpWalletPositions(): Promise<void> {
           buildTrackedWalletPositionKey(position.walletAddress, position.positionAddress),
         );
       }
-      const existingKeys =
-        trackedLpWalletPositionKeysByWallet.get(wallet.address) ?? new Set<string>();
-      trackedLpWalletPositionKeysByWallet.set(
-        wallet.address,
-        existingKeys.size > 0 ? existingKeys : freshKeys,
-      );
+      trackedLpWalletPositionKeysByWallet.set(wallet.address, freshKeys);
       console.log(
         `[bootstrap] lp wallet ${wallet.label} (${wallet.address}) positions=${positions.length}`,
       );
@@ -606,7 +557,6 @@ async function bootstrapTrackedLpWalletPositions(): Promise<void> {
       );
     }
   }
-  saveLpWalletTrackerStateToDisk();
 }
 
 async function scanTick(): Promise<void> {
@@ -867,7 +817,6 @@ async function processLpWalletTrackerTick(): Promise<void> {
       }
 
       trackedLpWalletPositionKeysByWallet.set(wallet.address, currentKeys);
-      saveLpWalletTrackerStateToDisk();
     } catch (err) {
       console.error(
         `[lp-wallet] tracker error for ${wallet.label} (${wallet.address})`,
