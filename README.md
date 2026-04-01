@@ -39,7 +39,8 @@ npm install
 - Optional: `LP_WALLET_TRACKER_INTERVAL_MS` (default `60000`)
 - Optional: `LP_WALLET_ENRICHMENT_RETRY_COUNT` (default `3`)
 - Optional: `LP_WALLET_ENRICHMENT_RETRY_DELAY_MS` (default `5000`)
-- Optional: `LP_TRACKED_WALLETS` (comma-separated `label:wallet` entries for DLMM wallet-open alerts)
+- Optional: `LP_TRACKED_WALLETS_FILE` (default `./tracked-lp-wallets.json`)
+- Optional legacy fallback: `LP_TRACKED_WALLETS` (comma-separated `label:wallet` entries for DLMM wallet-open alerts)
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
 - Optional: `MAX_SOL_PER_10K_MC` (default `1`)
@@ -66,6 +67,7 @@ npm run dev
 - Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
 - Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
 - Optional LP wallet tracker: poll labeled Solana wallets and alert when a tracked wallet opens a new Meteora DLMM position.
+- Preferred wallet input is a JSON file like `tracked-lp-wallets.json` (see `tracked-lp-wallets.example.json`); `.env` wallet list is kept as a legacy fallback.
 - If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration, trending, and LP wallet tracker alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID`, `TELEGRAM_TRENDING_THREAD_ID`, and `TELEGRAM_LP_WALLET_THREAD_ID`.
 - Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
 - Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.

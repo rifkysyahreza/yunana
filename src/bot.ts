@@ -1,4 +1,6 @@
 import "dotenv/config";
+import fs from "fs";
+import path from "path";
 
 type JsonRpcResponse<T> = {
   result?: T;
@@ -107,6 +109,12 @@ type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
 type TrackedLpWallet = {
   address: string;
   label: string;
+};
+
+type TrackedLpWalletFileRow = {
+  address?: string;
+  label?: string;
+  enabled?: boolean;
 };
 
 type DlmmPositionAccount = {
@@ -229,7 +237,9 @@ const LP_WALLET_ENRICHMENT_RETRY_COUNT = Number(
 const LP_WALLET_ENRICHMENT_RETRY_DELAY_MS = Number(
   process.env.LP_WALLET_ENRICHMENT_RETRY_DELAY_MS ?? "5000",
 );
-const LP_TRACKED_WALLETS = parseTrackedLpWallets(process.env.LP_TRACKED_WALLETS);
+const LP_TRACKED_WALLETS_FILE =
+  process.env.LP_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-lp-wallets.json");
+const LP_TRACKED_WALLETS = loadTrackedLpWallets();
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
 
@@ -1846,6 +1856,47 @@ function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
       label: label || shortenAddress(address),
     }];
   });
+}
+
+function parseTrackedLpWalletFileRows(rows: unknown): TrackedLpWallet[] {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  return rows.flatMap((row) => {
+    const item = row as TrackedLpWalletFileRow;
+    const address = item.address?.trim();
+    if (!address || item.enabled === false) {
+      return [];
+    }
+    return [{
+      address,
+      label: item.label?.trim() || shortenAddress(address),
+    }];
+  });
+}
+
+function loadTrackedLpWallets(): TrackedLpWallet[] {
+  try {
+    if (fs.existsSync(LP_TRACKED_WALLETS_FILE)) {
+      const raw = fs.readFileSync(LP_TRACKED_WALLETS_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      const wallets = parseTrackedLpWalletFileRows(parsed);
+      if (wallets.length > 0) {
+        return wallets;
+      }
+      console.warn(
+        `[lp-wallet] tracked wallet file exists but yielded no enabled wallets: ${LP_TRACKED_WALLETS_FILE}`,
+      );
+      return [];
+    }
+  } catch (err) {
+    console.error(
+      `[lp-wallet] failed to load wallet file ${LP_TRACKED_WALLETS_FILE}`,
+      err,
+    );
+  }
+
+  return parseTrackedLpWallets(process.env.LP_TRACKED_WALLETS);
 }
 
 function parseOptionalNumber(input: string | undefined): number | null {
