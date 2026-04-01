@@ -23,6 +23,14 @@ type JsonRpcResponse<T> = {
   error?: { code: number; message: string };
 };
 
+type EarlyDlmmWalletResult = {
+  pairLabel: string | null;
+  poolBinLabel: string | null;
+  poolAddress: string;
+  wallets: string[];
+  source: string;
+};
+
 type SignatureInfo = {
   signature: string;
   err: unknown;
@@ -313,6 +321,7 @@ type PipelineStage =
 const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
+const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "";
 const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_MIGRATION_THREAD_ID,
 );
@@ -2391,7 +2400,12 @@ async function pollTelegramUpdates(): Promise<void> {
     ok?: boolean;
     result?: Array<{
       update_id: number;
-      message?: { text?: string; chat?: { id?: number | string } };
+      message?: {
+        text?: string;
+        message_thread_id?: number;
+        chat?: { id?: number | string };
+        from?: { id?: number | string };
+      };
     }>;
   };
   const updates = Array.isArray(json.result) ? json.result : [];
@@ -2399,11 +2413,29 @@ async function pollTelegramUpdates(): Promise<void> {
     telegramUpdateOffset = Math.max(telegramUpdateOffset, update.update_id + 1);
     const text = update.message?.text ?? "";
     const chatId = update.message?.chat?.id;
+    const senderId = update.message?.from?.id;
+    const messageThreadId = update.message?.message_thread_id;
     if (!text || chatId === undefined || chatId === null) {
       continue;
     }
     if (isTaggedPing(text)) {
       await respondPong(chatId);
+      continue;
+    }
+    const command = parseTelegramCommand(text);
+    if (!command) {
+      continue;
+    }
+    if (!isAllowedTelegramUser(senderId)) {
+      await sendTelegramPlainMessage(
+        chatId,
+        "unauthorized",
+        messageThreadId,
+      );
+      continue;
+    }
+    if (command.kind === "early_dlmm") {
+      await handleEarlyDlmmCommand(chatId, command.poolAddress, messageThreadId);
     }
   }
 }
@@ -2414,16 +2446,111 @@ function isTaggedPing(text: string): boolean {
   return lower.includes("ping") && lower.includes(mention);
 }
 
+function isAllowedTelegramUser(senderId: number | string | undefined): boolean {
+  if (!TELEGRAM_ALLOWED_USER_ID) {
+    return true;
+  }
+  if (senderId === undefined || senderId === null) {
+    return false;
+  }
+  return String(senderId) === TELEGRAM_ALLOWED_USER_ID;
+}
+
+function parseTelegramCommand(text: string):
+  | { kind: "early_dlmm"; poolAddress: string }
+  | null {
+  const mention = `@${telegramBotUsername.toLowerCase()}`;
+  const normalized = text.trim().replace(/\s+/g, " ");
+  const lower = normalized.toLowerCase();
+  if (!lower.includes(mention)) {
+    return null;
+  }
+
+  const escapedMention = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const earlyDlmmRegex = new RegExp(`${escapedMention}\\s+early\\s+dlmm\\s+([1-9A-HJ-NP-Za-km-z]{32,44})`, "i");
+  const match = normalized.match(earlyDlmmRegex);
+  if (match?.[1]) {
+    return { kind: "early_dlmm", poolAddress: match[1] };
+  }
+  return null;
+}
+
 async function respondPong(chatId: number | string): Promise<void> {
   const uptimeSec = Math.floor((Date.now() - BOT_STARTED_AT) / 1000);
+  await sendTelegramPlainMessage(chatId, `pong\nuptime: ${uptimeSec}s`);
+}
+
+async function sendTelegramPlainMessage(
+  chatId: number | string,
+  text: string,
+  messageThreadId?: number,
+): Promise<void> {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId,
-      text: `pong\nuptime: ${uptimeSec}s`,
+      text,
+      ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
     }),
   });
+}
+
+async function handleEarlyDlmmCommand(
+  chatId: number | string,
+  poolAddress: string,
+  messageThreadId?: number,
+): Promise<void> {
+  await sendTelegramPlainMessage(
+    chatId,
+    `working on earliest DLMM wallets for ${poolAddress}...`,
+    messageThreadId,
+  );
+
+  const result = await fetchEarlyDlmmWallets(poolAddress);
+  const headerPool = result.pairLabel
+    ? `${result.pairLabel}${result.poolBinLabel ? ` (${result.poolBinLabel})` : ""}`
+    : poolAddress;
+  const lines = [
+    `Early DLMM Wallets`,
+    `Pool: ${headerPool}`,
+    `DLMM Pool: ${result.poolAddress}`,
+    "",
+    ...(result.wallets.length > 0
+      ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
+      : ["No wallets found."]),
+  ];
+  await sendTelegramPlainMessage(chatId, lines.join("\n"), messageThreadId);
+}
+
+async function fetchEarlyDlmmWallets(
+  poolAddress: string,
+): Promise<EarlyDlmmWalletResult> {
+  const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
+  return {
+    pairLabel:
+      poolMeta?.mint_x_symbol && poolMeta?.mint_y_symbol
+        ? `${poolMeta.mint_x_symbol} / ${poolMeta.mint_y_symbol}`
+        : poolMeta?.name ?? null,
+    poolBinLabel:
+      poolMeta
+        ? formatLpPoolBin({
+            walletAddress: "",
+            walletLabel: "",
+            positionAddress: "",
+            poolAddress,
+            poolBinStep:
+              toNumber(poolMeta.bin_step) ?? toNumber(poolMeta.dlmm_params?.bin_step),
+            poolFeePct:
+              toNumber(poolMeta.base_fee_percentage) ??
+              toNumber(poolMeta.fee_pct) ??
+              toNumber(poolMeta.dlmm_params?.base_fee_percentage),
+          })
+        : null,
+    poolAddress,
+    wallets: [],
+    source: "placeholder",
+  };
 }
 
 function sleep(ms: number): Promise<void> {
