@@ -29,6 +29,7 @@ type EarlyDlmmWalletResult = {
   poolAddress: string;
   wallets: string[];
   source: string;
+  poolResolved: boolean;
 };
 
 type ShyftGraphqlPositionsResponse = {
@@ -2557,14 +2558,21 @@ async function handleEarlyDlmmCommand(
     const headerPool = result.pairLabel
       ? `${result.pairLabel}${result.poolBinLabel ? ` (${result.poolBinLabel})` : ""}`
       : poolAddress;
+    const bodyLines = result.wallets.length > 0
+      ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
+      : result.poolResolved
+        ? ["No wallets found."]
+        : [
+            "Could not resolve this as a valid or indexed DLMM pool address.",
+            "Please send the actual DLMM pool address or try again later if the pool is very new.",
+          ];
+
     const lines = [
       `Early DLMM Wallets`,
       `Pool: ${headerPool}`,
       `DLMM Pool: ${result.poolAddress}`,
       "",
-      ...(result.wallets.length > 0
-        ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
-        : ["No wallets found."]),
+      ...bodyLines,
     ];
     await sendTelegramPlainMessage(chatId, lines.join("\n"), messageThreadId);
   } catch (err) {
@@ -2669,6 +2677,7 @@ async function fetchEarlyDlmmWallets(
     poolAddress,
     wallets,
     source: "shyft_graphql",
+    poolResolved: Boolean(poolMeta) || positions.length > 0,
   };
 }
 
