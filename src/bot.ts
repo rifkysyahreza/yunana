@@ -2654,8 +2654,8 @@ function formatLpRange(position: TrackedWalletPosition): string {
     position.maxPrice !== undefined
   ) {
     const widthPct =
-      position.minPrice > 0
-        ? ((position.maxPrice - position.minPrice) / position.minPrice) * 100
+      position.maxPrice > 0
+        ? ((position.minPrice - position.maxPrice) / position.maxPrice) * 100
         : null;
     return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}${widthPct !== null ? ` (${trimNumber(widthPct)}%)` : ""}`;
   }
@@ -2677,10 +2677,23 @@ function trimNumber(value: number): string {
   if (value === 0) {
     return "0";
   }
-  if (Math.abs(value) >= 1) {
-    return value.toFixed(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+
+  let decimals = 4;
+  const abs = Math.abs(value);
+  if (abs >= 1) {
+    decimals = 4;
+  } else if (abs >= 0.01) {
+    decimals = 6;
+  } else if (abs >= 0.0001) {
+    decimals = 8;
+  } else {
+    decimals = 12;
   }
-  return value.toPrecision(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+
+  return value
+    .toFixed(decimals)
+    .replace(/\.0+$/, "")
+    .replace(/(\.\d*?)0+$/, "$1");
 }
 
 function formatLpStrategy(strategy: string | null | undefined): string | null {
