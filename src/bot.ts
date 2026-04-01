@@ -33,16 +33,10 @@ type EarlyDlmmWalletResult = {
 };
 
 type ShyftGraphqlPositionsResponse = {
-  data?: {
-    meteora_dlmm_Position?: Array<{
-      owner?: string;
-      pubkey?: string;
-    }>;
-    meteora_dlmm_PositionV2?: Array<{
-      owner?: string;
-      pubkey?: string;
-    }>;
-  };
+  data?: Record<string, Array<{
+    owner?: string;
+    pubkey?: string;
+  }> | undefined>;
   errors?: Array<{ message?: string }>;
 };
 
@@ -2387,6 +2381,51 @@ async function startTelegramPingListener(): Promise<void> {
   }, 5000);
 }
 
+async function fetchShyftDlmmPositionsByTable(
+  poolAddress: string,
+  tableName: "meteora_dlmm_Position" | "meteora_dlmm_PositionV2",
+): Promise<EarlyDlmmPositionRow[]> {
+  const query = `
+    query EarlyDlmmWallets {
+      ${tableName}(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
+        owner
+        pubkey
+      }
+    }
+  `;
+
+  try {
+    const res = await fetch(
+      `https://programs.shyft.to/v0/graphql/accounts?api_key=${SHYFT_API_KEY}&network=mainnet-beta`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          variables: {},
+          operationName: "EarlyDlmmWallets",
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      throw new Error(`shyft graphql http ${res.status}`);
+    }
+
+    const json = (await res.json()) as ShyftGraphqlPositionsResponse;
+    if (Array.isArray(json.errors) && json.errors.length > 0) {
+      throw new Error(json.errors[0]?.message || "shyft graphql error");
+    }
+
+    return (json.data?.[tableName] as EarlyDlmmPositionRow[] | undefined) ?? [];
+  } catch (err) {
+    console.warn(
+      `[early-dlmm] pool=${poolAddress} table=${tableName} shyft_error=${err instanceof Error ? err.message : String(err)}`,
+    );
+    return [];
+  }
+}
+
 async function fetchEarliestPositionTimestamp(
   positionAddress: string,
 ): Promise<number> {
@@ -2628,43 +2667,11 @@ async function fetchEarlyDlmmWallets(
     throw new Error("missing SHYFT_API_KEY");
   }
 
-  const query = `
-    query EarlyDlmmWallets {
-      meteora_dlmm_Position(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
-        owner
-        pubkey
-      }
-      meteora_dlmm_PositionV2(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
-        owner
-        pubkey
-      }
-    }
-  `;
+  const [positionsV1, positionsV2] = await Promise.all([
+    fetchShyftDlmmPositionsByTable(poolAddress, "meteora_dlmm_Position"),
+    fetchShyftDlmmPositionsByTable(poolAddress, "meteora_dlmm_PositionV2"),
+  ]);
 
-  const res = await fetch(
-    `https://programs.shyft.to/v0/graphql/accounts?api_key=${SHYFT_API_KEY}&network=mainnet-beta`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        variables: {},
-        operationName: "EarlyDlmmWallets",
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    throw new Error(`shyft graphql http ${res.status}`);
-  }
-
-  const json = (await res.json()) as ShyftGraphqlPositionsResponse;
-  if (Array.isArray(json.errors) && json.errors.length > 0) {
-    throw new Error(json.errors[0]?.message || "shyft graphql error");
-  }
-
-  const positionsV1 = json.data?.meteora_dlmm_Position ?? [];
-  const positionsV2 = json.data?.meteora_dlmm_PositionV2 ?? [];
   const positions: EarlyDlmmPositionRow[] = [
     ...positionsV1,
     ...positionsV2,
