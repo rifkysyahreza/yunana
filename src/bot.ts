@@ -43,13 +43,6 @@ type ShyftGraphqlPositionsResponse = {
       pubkey?: string;
       createdAt?: string;
     }>;
-    meteora_dlmm_LbPair?: Array<{
-      pubkey?: string;
-      tokenXMint?: string;
-      tokenYMint?: string;
-      binStep?: string | number;
-      baseFeePercentage?: string | number;
-    }>;
   };
   errors?: Array<{ message?: string }>;
 };
@@ -2564,13 +2557,6 @@ async function fetchEarlyDlmmWallets(
 
   const query = `
     query EarlyDlmmWallets {
-      meteora_dlmm_LbPair(where: {pubkey: {_eq: ${JSON.stringify(poolAddress)}}}) {
-        pubkey
-        tokenXMint
-        tokenYMint
-        binStep
-        baseFeePercentage
-      }
       meteora_dlmm_Position(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
         owner
         pubkey
@@ -2606,7 +2592,6 @@ async function fetchEarlyDlmmWallets(
     throw new Error(json.errors[0]?.message || "shyft graphql error");
   }
 
-  const lbPair = json.data?.meteora_dlmm_LbPair?.[0];
   const positions = [
     ...(json.data?.meteora_dlmm_Position ?? []),
     ...(json.data?.meteora_dlmm_PositionV2 ?? []),
@@ -2632,25 +2617,24 @@ async function fetchEarlyDlmmWallets(
     .slice(0, 10)
     .map(([wallet]) => wallet);
 
-  let pairLabel: string | null = null;
-  if (lbPair?.tokenXMint && lbPair?.tokenYMint) {
-    const [tokenX, tokenY] = await Promise.all([
-      fetchGmgnTokenWithRetry(lbPair.tokenXMint),
-      fetchGmgnTokenWithRetry(lbPair.tokenYMint),
-    ]);
-    const sx = tokenX?.symbol ?? shortenAddress(lbPair.tokenXMint);
-    const sy = tokenY?.symbol ?? shortenAddress(lbPair.tokenYMint);
-    pairLabel = `${sx} / ${sy}`;
-  }
+  const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
+  const pairLabel =
+    poolMeta?.mint_x_symbol && poolMeta?.mint_y_symbol
+      ? `${poolMeta.mint_x_symbol} / ${poolMeta.mint_y_symbol}`
+      : poolMeta?.name ?? null;
 
-  const poolBinLabel = lbPair
+  const poolBinLabel = poolMeta
     ? formatLpPoolBin({
         walletAddress: "",
         walletLabel: "",
         positionAddress: "",
         poolAddress,
-        poolBinStep: toNumber(lbPair.binStep),
-        poolFeePct: toNumber(lbPair.baseFeePercentage),
+        poolBinStep:
+          toNumber(poolMeta.bin_step) ?? toNumber(poolMeta.dlmm_params?.bin_step),
+        poolFeePct:
+          toNumber(poolMeta.base_fee_percentage) ??
+          toNumber(poolMeta.fee_pct) ??
+          toNumber(poolMeta.dlmm_params?.base_fee_percentage),
       })
     : null;
 
