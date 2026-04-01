@@ -2647,10 +2647,24 @@ function formatLpValue(position: TrackedWalletPosition): string {
 }
 
 function formatLpRange(position: TrackedWalletPosition): string {
-  if (position.minPrice !== null && position.minPrice !== undefined && position.maxPrice !== null && position.maxPrice !== undefined) {
-    return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}`;
+  if (
+    position.minPrice !== null &&
+    position.minPrice !== undefined &&
+    position.maxPrice !== null &&
+    position.maxPrice !== undefined
+  ) {
+    const widthPct =
+      position.minPrice > 0
+        ? ((position.maxPrice - position.minPrice) / position.minPrice) * 100
+        : null;
+    return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}${widthPct !== null ? ` (${trimNumber(widthPct)}%)` : ""}`;
   }
-  if (position.lowerBinId !== null && position.lowerBinId !== undefined && position.upperBinId !== null && position.upperBinId !== undefined) {
+  if (
+    position.lowerBinId !== null &&
+    position.lowerBinId !== undefined &&
+    position.upperBinId !== null &&
+    position.upperBinId !== undefined
+  ) {
     return `Bin ${position.lowerBinId} ~ ${position.upperBinId}`;
   }
   return "Unknown";

@@ -3,3 +3,4 @@ dist
 notes
 .env
 runtime-data/
+tracked-lp-wallets.json
