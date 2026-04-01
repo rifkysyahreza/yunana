@@ -68,6 +68,7 @@ npm run dev
 - Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
 - Optional LP wallet tracker: poll labeled Solana wallets and alert when a tracked wallet opens a new Meteora DLMM position.
 - Preferred wallet input is a JSON file like `tracked-lp-wallets.json` (see `tracked-lp-wallets.example.json`); `.env` wallet list is kept as a legacy fallback.
+- The JSON file supports both a simple array format and a richer schema with `version`, `defaults`, and `wallets` entries (plus optional `group`, `priority`, and `notes` per wallet).
 - If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration, trending, and LP wallet tracker alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID`, `TELEGRAM_TRENDING_THREAD_ID`, and `TELEGRAM_LP_WALLET_THREAD_ID`.
 - Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
 - Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.

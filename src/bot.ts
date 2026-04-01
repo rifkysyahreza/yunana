@@ -204,12 +204,29 @@ type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
 type TrackedLpWallet = {
   address: string;
   label: string;
+  enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
 };
 
 type TrackedLpWalletFileRow = {
   address?: string;
   label?: string;
   enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
+};
+
+type TrackedLpWalletFileSchema = {
+  version?: number;
+  defaults?: {
+    enabled?: boolean;
+    group?: string;
+    priority?: number;
+  };
+  wallets?: TrackedLpWalletFileRow[];
 };
 
 type DlmmPositionAccount = {
@@ -2451,21 +2468,42 @@ function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
   });
 }
 
-function parseTrackedLpWalletFileRows(rows: unknown): TrackedLpWallet[] {
+function parseTrackedLpWalletFileRows(
+  rows: unknown,
+  defaults?: TrackedLpWalletFileSchema["defaults"],
+): TrackedLpWallet[] {
   if (!Array.isArray(rows)) {
     return [];
   }
   return rows.flatMap((row) => {
     const item = row as TrackedLpWalletFileRow;
     const address = item.address?.trim();
-    if (!address || item.enabled === false) {
+    const enabled = item.enabled ?? defaults?.enabled ?? true;
+    if (!address || enabled === false) {
       return [];
     }
     return [{
       address,
       label: item.label?.trim() || shortenAddress(address),
+      enabled,
+      group: item.group?.trim() || defaults?.group,
+      priority: item.priority ?? defaults?.priority,
+      notes: item.notes?.trim(),
     }];
   });
+}
+
+function parseTrackedLpWalletFile(input: unknown): TrackedLpWallet[] {
+  if (Array.isArray(input)) {
+    return parseTrackedLpWalletFileRows(input);
+  }
+
+  const schema = input as TrackedLpWalletFileSchema;
+  if (schema && Array.isArray(schema.wallets)) {
+    return parseTrackedLpWalletFileRows(schema.wallets, schema.defaults);
+  }
+
+  return [];
 }
 
 function loadTrackedLpWallets(): TrackedLpWallet[] {
@@ -2473,7 +2511,7 @@ function loadTrackedLpWallets(): TrackedLpWallet[] {
     if (fs.existsSync(LP_TRACKED_WALLETS_FILE)) {
       const raw = fs.readFileSync(LP_TRACKED_WALLETS_FILE, "utf8");
       const parsed = JSON.parse(raw);
-      const wallets = parseTrackedLpWalletFileRows(parsed);
+      const wallets = parseTrackedLpWalletFile(parsed);
       if (wallets.length > 0) {
         return wallets;
       }
