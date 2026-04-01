@@ -2657,7 +2657,7 @@ function formatLpRange(position: TrackedWalletPosition): string {
       position.maxPrice > 0
         ? ((position.minPrice - position.maxPrice) / position.maxPrice) * 100
         : null;
-    return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}${widthPct !== null ? ` (${trimNumber(widthPct)}%)` : ""}`;
+    return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}${widthPct !== null ? ` (${widthPct.toFixed(2)}%)` : ""}`;
   }
   if (
     position.lowerBinId !== null &&
