@@ -39,6 +39,7 @@ npm install
 - Optional: `LP_WALLET_TRACKER_INTERVAL_MS` (default `60000`)
 - Optional: `LP_WALLET_ENRICHMENT_RETRY_COUNT` (default `3`)
 - Optional: `LP_WALLET_ENRICHMENT_RETRY_DELAY_MS` (default `5000`)
+- Optional: `LP_WALLET_SHARD_COUNT` (default `1`, splits tracked wallets across LP tracker ticks)
 - Optional: `LP_TRACKED_WALLETS_FILE` (default `./tracked-lp-wallets.json`)
 - Optional legacy fallback: `LP_TRACKED_WALLETS` (comma-separated `label:wallet` entries for DLMM wallet-open alerts)
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)

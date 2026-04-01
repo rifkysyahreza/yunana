@@ -369,6 +369,10 @@ const LP_WALLET_ENRICHMENT_RETRY_COUNT = Number(
 const LP_WALLET_ENRICHMENT_RETRY_DELAY_MS = Number(
   process.env.LP_WALLET_ENRICHMENT_RETRY_DELAY_MS ?? "5000",
 );
+const LP_WALLET_SHARD_COUNT = Math.max(
+  1,
+  Number(process.env.LP_WALLET_SHARD_COUNT ?? "1"),
+);
 const LP_TRACKED_WALLETS_FILE =
   process.env.LP_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-lp-wallets.json");
 const LP_TRACKED_WALLETS = loadTrackedLpWallets();
@@ -464,6 +468,7 @@ async function main(): Promise<void> {
   console.log(
     `[boot] lp enrichment retry count=${LP_WALLET_ENRICHMENT_RETRY_COUNT} delay=${LP_WALLET_ENRICHMENT_RETRY_DELAY_MS}ms`,
   );
+  console.log(`[boot] lp wallet shard count=${LP_WALLET_SHARD_COUNT}`);
   if (FORWARD_ALL_MIGRATED) {
     console.log(
       "[boot] ratio filter is DISABLED because FORWARD_ALL_MIGRATED=true",
@@ -490,12 +495,33 @@ async function bootstrapCursors(): Promise<void> {
   }
 }
 
+function getOrderedLpTrackedWallets(): TrackedLpWallet[] {
+  return [...LP_TRACKED_WALLETS].sort((a, b) => {
+    const aPriority = a.priority ?? 100;
+    const bPriority = b.priority ?? 100;
+    if (aPriority !== bPriority) {
+      return aPriority - bPriority;
+    }
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function getLpWalletShardForTick(tick: number): TrackedLpWallet[] {
+  const ordered = getOrderedLpTrackedWallets();
+  if (ordered.length === 0) {
+    return [];
+  }
+  const shardCount = Math.max(1, Math.min(LP_WALLET_SHARD_COUNT, ordered.length));
+  const shardIndex = tick % shardCount;
+  return ordered.filter((_, idx) => idx % shardCount === shardIndex);
+}
+
 async function bootstrapTrackedLpWalletPositions(): Promise<void> {
   if (!ENABLE_LP_WALLET_TRACKER || LP_TRACKED_WALLETS.length === 0) {
     return;
   }
 
-  for (const wallet of LP_TRACKED_WALLETS) {
+  for (const wallet of getOrderedLpTrackedWallets()) {
     try {
       const positions = await fetchTrackedWalletPositions(wallet);
       const keys = new Set<string>();
@@ -750,7 +776,8 @@ async function processTrendingTick(): Promise<void> {
 }
 
 async function processLpWalletTrackerTick(): Promise<void> {
-  for (const wallet of LP_TRACKED_WALLETS) {
+  const shardWallets = getLpWalletShardForTick(tickCounter);
+  for (const wallet of shardWallets) {
     try {
       const positions = await fetchTrackedWalletPositions(wallet);
       const previousKeys =
