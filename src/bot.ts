@@ -36,12 +36,10 @@ type ShyftGraphqlPositionsResponse = {
     meteora_dlmm_Position?: Array<{
       owner?: string;
       pubkey?: string;
-      createdAt?: string;
     }>;
     meteora_dlmm_PositionV2?: Array<{
       owner?: string;
       pubkey?: string;
-      createdAt?: string;
     }>;
   };
   errors?: Array<{ message?: string }>;
@@ -2380,6 +2378,36 @@ async function startTelegramPingListener(): Promise<void> {
   }, 5000);
 }
 
+async function fetchEarliestPositionTimestamp(
+  positionAddress: string,
+): Promise<number> {
+  let before: string | undefined;
+  let oldestBlockTime: number | null = null;
+
+  while (true) {
+    const signatures = await getSignaturesForAddress(positionAddress, 100, before);
+    if (signatures.length === 0) {
+      break;
+    }
+
+    for (const sig of signatures) {
+      if (typeof sig.blockTime === "number") {
+        oldestBlockTime = sig.blockTime;
+      }
+    }
+
+    if (signatures.length < 100) {
+      break;
+    }
+    before = signatures[signatures.length - 1]?.signature;
+    if (!before) {
+      break;
+    }
+  }
+
+  return oldestBlockTime !== null ? oldestBlockTime * 1000 : Number.POSITIVE_INFINITY;
+}
+
 async function fetchTelegramBotUsername(): Promise<string> {
   const res = await fetch(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`,
@@ -2560,12 +2588,10 @@ async function fetchEarlyDlmmWallets(
       meteora_dlmm_Position(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
         owner
         pubkey
-        createdAt
       }
       meteora_dlmm_PositionV2(where: {lbPair: {_eq: ${JSON.stringify(poolAddress)}}}) {
         owner
         pubkey
-        createdAt
       }
     }
   `;
@@ -2600,12 +2626,11 @@ async function fetchEarlyDlmmWallets(
   const earliestByWallet = new Map<string, number>();
   for (const position of positions) {
     const owner = position.owner?.trim();
-    if (!owner) {
+    const positionAddress = position.pubkey?.trim();
+    if (!owner || !positionAddress) {
       continue;
     }
-    const createdAtMs = position.createdAt
-      ? new Date(position.createdAt).getTime()
-      : Number.POSITIVE_INFINITY;
+    const createdAtMs = await fetchEarliestPositionTimestamp(positionAddress);
     const current = earliestByWallet.get(owner);
     if (current === undefined || createdAtMs < current) {
       earliestByWallet.set(owner, createdAtMs);
@@ -2654,10 +2679,15 @@ function sleep(ms: number): Promise<void> {
 async function getSignaturesForAddress(
   address: string,
   limit: number,
+  before?: string,
 ): Promise<SignatureInfo[]> {
   const result = await rpcCall<SignatureInfo[]>("getSignaturesForAddress", [
     address,
-    { limit, commitment: "confirmed" },
+    {
+      limit,
+      commitment: "confirmed",
+      ...(before ? { before } : {}),
+    },
   ]);
   return result ?? [];
 }
