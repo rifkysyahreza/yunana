@@ -1477,7 +1477,7 @@ async function sendLpWalletTrackerAlert(
     `DLMM Pool: <code>${escapeHtml(position.poolAddress)}</code>`,
     "",
     `<u>Quick Action</u>`,
-    `<a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${solscanPositionLink}">POS</a> ● <a href="${lpAgentLink}">LPA</a>`,
+    `<a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${lpAgentLink}">LPA</a>`,
   ].join("\n");
 
   const payloadBase = buildTelegramPayloadBase("lp_wallet_tracker");
