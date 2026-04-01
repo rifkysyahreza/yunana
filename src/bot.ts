@@ -46,6 +46,11 @@ type ShyftGraphqlPositionsResponse = {
   errors?: Array<{ message?: string }>;
 };
 
+type EarlyDlmmPositionRow = {
+  owner?: string;
+  pubkey?: string;
+};
+
 type SignatureInfo = {
   signature: string;
   err: unknown;
@@ -2658,10 +2663,16 @@ async function fetchEarlyDlmmWallets(
     throw new Error(json.errors[0]?.message || "shyft graphql error");
   }
 
-  const positions = [
-    ...(json.data?.meteora_dlmm_Position ?? []),
-    ...(json.data?.meteora_dlmm_PositionV2 ?? []),
+  const positionsV1 = json.data?.meteora_dlmm_Position ?? [];
+  const positionsV2 = json.data?.meteora_dlmm_PositionV2 ?? [];
+  const positions: EarlyDlmmPositionRow[] = [
+    ...positionsV1,
+    ...positionsV2,
   ];
+
+  console.log(
+    `[early-dlmm] pool=${poolAddress} shyft_positions_v1=${positionsV1.length} shyft_positions_v2=${positionsV2.length}`,
+  );
 
   const earliestByWallet = new Map<string, number>();
   for (const position of positions) {
