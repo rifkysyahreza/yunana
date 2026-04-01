@@ -373,6 +373,9 @@ const LP_WALLET_SHARD_COUNT = Math.max(
   1,
   Number(process.env.LP_WALLET_SHARD_COUNT ?? "1"),
 );
+const METEORA_POOL_META_CACHE_TTL_MS = Number(
+  process.env.METEORA_POOL_META_CACHE_TTL_MS ?? "3600000",
+);
 const LP_TRACKED_WALLETS_FILE =
   process.env.LP_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-lp-wallets.json");
 const LP_TRACKED_WALLETS = loadTrackedLpWallets();
@@ -441,6 +444,10 @@ const loggedPreCandidateDrops = new Set<string>();
 const loggedSecurityNotReadyMints = new Set<string>();
 const seenTrendingMints = new Map<string, number>();
 const trackedLpWalletPositionKeysByWallet = new Map<string, Set<string>>();
+const meteoraPoolMetaCache = new Map<
+  string,
+  { value: MeteoraPool | null; expiresAt: number }
+>();
 const inFlightMints = new Set<string>();
 let isScanTickRunning = false;
 let telegramUpdateOffset = 0;
@@ -469,6 +476,9 @@ async function main(): Promise<void> {
     `[boot] lp enrichment retry count=${LP_WALLET_ENRICHMENT_RETRY_COUNT} delay=${LP_WALLET_ENRICHMENT_RETRY_DELAY_MS}ms`,
   );
   console.log(`[boot] lp wallet shard count=${LP_WALLET_SHARD_COUNT}`);
+  console.log(
+    `[boot] meteora pool meta cache ttl=${METEORA_POOL_META_CACHE_TTL_MS}ms`,
+  );
   if (FORWARD_ALL_MIGRATED) {
     console.log(
       "[boot] ratio filter is DISABLED because FORWARD_ALL_MIGRATED=true",
@@ -1803,6 +1813,12 @@ async function fetchDlmmPositionAccountsV2(
 async function fetchMeteoraPoolMeta(
   poolAddress: string,
 ): Promise<MeteoraPool | null> {
+  const cached = meteoraPoolMetaCache.get(poolAddress);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
   const url = new URL(METEORA_SEARCH_URL);
   url.searchParams.set("page_size", "20");
   url.searchParams.set("query", poolAddress);
@@ -1810,14 +1826,22 @@ async function fetchMeteoraPoolMeta(
 
   const res = await fetch(url.toString());
   if (!res.ok) {
+    meteoraPoolMetaCache.set(poolAddress, {
+      value: null,
+      expiresAt: now + Math.min(30000, METEORA_POOL_META_CACHE_TTL_MS),
+    });
     return null;
   }
 
   const json = (await res.json()) as { data?: MeteoraPool[] };
   const pools = Array.isArray(json.data) ? json.data : [];
-  return (
-    pools.find((pool) => pool.pool_address === poolAddress) ?? pools[0] ?? null
-  );
+  const value =
+    pools.find((pool) => pool.pool_address === poolAddress) ?? pools[0] ?? null;
+  meteoraPoolMetaCache.set(poolAddress, {
+    value,
+    expiresAt: now + METEORA_POOL_META_CACHE_TTL_MS,
+  });
+  return value;
 }
 
 async function fetchDlmmWalletPoolPositions(
