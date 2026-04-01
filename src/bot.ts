@@ -338,6 +338,9 @@ const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
 const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "";
 const SHYFT_API_KEY = process.env.SHYFT_API_KEY?.trim() ?? "";
+const TELEGRAM_EARLY_DLMM_THREAD_ID = parseOptionalNumber(
+  process.env.TELEGRAM_EARLY_DLMM_THREAD_ID,
+);
 const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_MIGRATION_THREAD_ID,
 );
@@ -2482,6 +2485,14 @@ async function pollTelegramUpdates(): Promise<void> {
     }
     if (command.kind === "early_dlmm") {
       await handleEarlyDlmmCommand(chatId, command.poolAddress, messageThreadId);
+      continue;
+    }
+    const autoPoolAddress = extractEarlyDlmmPoolAddressFromTopic(
+      text,
+      messageThreadId,
+    );
+    if (autoPoolAddress) {
+      await handleEarlyDlmmCommand(chatId, autoPoolAddress, messageThreadId);
     }
   }
 }
@@ -2500,6 +2511,20 @@ function isAllowedTelegramUser(senderId: number | string | undefined): boolean {
     return false;
   }
   return String(senderId) === TELEGRAM_ALLOWED_USER_ID;
+}
+
+function extractEarlyDlmmPoolAddressFromTopic(
+  text: string,
+  messageThreadId?: number,
+): string | null {
+  if (
+    TELEGRAM_EARLY_DLMM_THREAD_ID === null ||
+    messageThreadId !== TELEGRAM_EARLY_DLMM_THREAD_ID
+  ) {
+    return null;
+  }
+  const match = text.match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
+  return match?.[1] ?? null;
 }
 
 function parseTelegramCommand(text: string):
@@ -2537,6 +2562,7 @@ async function sendTelegramPlainMessage(
     body: JSON.stringify({
       chat_id: chatId,
       text,
+      parse_mode: "HTML",
       ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
     }),
   });
@@ -2570,9 +2596,11 @@ async function handleEarlyDlmmCommand(
     const lines = [
       `Early DLMM Wallets`,
       `Pool: ${headerPool}`,
-      `DLMM Pool: ${result.poolAddress}`,
+      `DLMM Pool: <code>${escapeHtml(result.poolAddress)}</code>`,
       "",
-      ...bodyLines,
+      ...(result.wallets.length > 0
+        ? result.wallets.map((wallet, idx) => `${idx + 1}. <code>${escapeHtml(wallet)}</code>`)
+        : bodyLines),
     ];
     await sendTelegramPlainMessage(chatId, lines.join("\n"), messageThreadId);
   } catch (err) {
