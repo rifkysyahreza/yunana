@@ -805,7 +805,7 @@ async function processNewDlmmPoolSignature(
     return;
   }
 
-  const dlmmPool = extractNewDlmmPoolFromTx(tx);
+  const dlmmPool = extractNewDlmmPoolFromTx(tx, signature);
   if (!dlmmPool) {
     return;
   }
@@ -842,7 +842,7 @@ async function processNewDlmmPoolSignature(
   await sendNewDlmmPoolTelegramAlert(signature, dlmmPool, gmgn, volume5m, volume1m);
 }
 
-function extractNewDlmmPoolFromTx(tx: ParsedTransaction): {
+function extractNewDlmmPoolFromTx(tx: ParsedTransaction, signature?: string): {
   poolAddress: string;
   nonSolMint: string;
   tokenXMint: string;
@@ -867,9 +867,15 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction): {
     try {
       hex = Buffer.from(data, "base64").subarray(0, 8).toString("hex");
     } catch {
+      console.log(
+        `[dlmm-pool-debug] sig=${signature ?? "unknown"} decode_failed program=${ix.programId} data_prefix=${String(data).slice(0, 24)}`,
+      );
       continue;
     }
     if (hex !== DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX) {
+      console.log(
+        `[dlmm-pool-debug] sig=${signature ?? "unknown"} discriminator_miss got=${hex} expected=${DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX} accounts=${ix.accounts?.length ?? 0}`,
+      );
       continue;
     }
 
@@ -877,6 +883,9 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction): {
     const tokenXMint = ix.accounts?.[2];
     const tokenYMint = ix.accounts?.[3];
     if (!poolAddress || !tokenXMint || !tokenYMint) {
+      console.log(
+        `[dlmm-pool-debug] sig=${signature ?? "unknown"} missing_accounts pool=${poolAddress ?? "none"} tokenX=${tokenXMint ?? "none"} tokenY=${tokenYMint ?? "none"}`,
+      );
       continue;
     }
 
@@ -885,6 +894,9 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction): {
       continue;
     }
 
+    console.log(
+      `[dlmm-pool-debug] sig=${signature ?? "unknown"} matched pool=${poolAddress} tokenX=${tokenXMint} tokenY=${tokenYMint} nonSol=${nonSolMint} creator=${creator ?? "none"}`,
+    );
     return {
       poolAddress,
       nonSolMint,
