@@ -43,6 +43,7 @@ type ParsedTransaction = {
       instructions?: Array<{
         programId?: string;
         accounts?: string[];
+        data?: string;
         parsed?: { type?: string };
       }>;
     };
@@ -205,7 +206,7 @@ type MeteoraPool = {
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
-type AlertKind = "migration" | "gmgn_trending" | "lp_wallet_tracker";
+type AlertKind = "migration" | "gmgn_trending" | "lp_wallet_tracker" | "new_dlmm_pool";
 type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
 
 type TrackedLpWallet = {
@@ -332,6 +333,7 @@ const TELEGRAM_LP_WALLET_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_LP_WALLET_THREAD_ID,
 );
 const BOT_STARTED_AT = Date.now();
+const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX = "493b2478ed536cc6";
 
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS ?? "15000");
 const FORWARD_ALL_MIGRATED =
@@ -375,8 +377,13 @@ const GMGN_TRENDING_INTERVAL_MS = Number(
 );
 const ENABLE_LP_WALLET_TRACKER =
   (process.env.ENABLE_LP_WALLET_TRACKER ?? "false").toLowerCase() === "true";
+const ENABLE_NEW_DLMM_POOL_TRACKER =
+  (process.env.ENABLE_NEW_DLMM_POOL_TRACKER ?? "false").toLowerCase() === "true";
 const LP_WALLET_TRACKER_INTERVAL_MS = Number(
   process.env.LP_WALLET_TRACKER_INTERVAL_MS ?? "60000",
+);
+const NEW_DLMM_POOL_MIN_VOLUME = Number(
+  process.env.NEW_DLMM_POOL_MIN_VOLUME ?? "5000",
 );
 const LP_WALLET_ENRICHMENT_RETRY_COUNT = Number(
   process.env.LP_WALLET_ENRICHMENT_RETRY_COUNT ?? "3",
@@ -488,6 +495,9 @@ async function main(): Promise<void> {
     `[boot] lp wallet tracker enabled=${ENABLE_LP_WALLET_TRACKER} interval=${LP_WALLET_TRACKER_INTERVAL_MS}ms wallets=${LP_TRACKED_WALLETS.length}`,
   );
   console.log(
+    `[boot] new dlmm pool tracker enabled=${ENABLE_NEW_DLMM_POOL_TRACKER} min_volume=${NEW_DLMM_POOL_MIN_VOLUME}`,
+  );
+  console.log(
     `[boot] lp enrichment retry count=${LP_WALLET_ENRICHMENT_RETRY_COUNT} delay=${LP_WALLET_ENRICHMENT_RETRY_DELAY_MS}ms`,
   );
   console.log(`[boot] lp wallet shard count=${LP_WALLET_SHARD_COUNT}`);
@@ -579,6 +589,9 @@ async function scanTick(): Promise<void> {
     for (const address of WATCH_ADDRESSES) {
       await scanAddress(address);
     }
+    if (ENABLE_NEW_DLMM_POOL_TRACKER) {
+      await scanAddress(DLMM_PROGRAM_ID);
+    }
     if (
       ENABLE_GMGN_TRENDING &&
       tickCounter %
@@ -646,6 +659,8 @@ async function processSignature(signature: string): Promise<void> {
   if (!tx) {
     return;
   }
+
+  await processNewDlmmPoolSignature(signature, tx);
 
   const mints = extractMigratedMints(tx);
   for (const mint of mints) {
@@ -773,6 +788,101 @@ async function logDroppedPreCandidate(input: {
       totalFee: input.totalFee ?? null,
     }),
   );
+}
+
+const seenDlmmPools = new Map<string, number>();
+
+async function processNewDlmmPoolSignature(
+  signature: string,
+  tx: ParsedTransaction,
+): Promise<void> {
+  if (!ENABLE_NEW_DLMM_POOL_TRACKER) {
+    return;
+  }
+
+  const dlmmPool = extractNewDlmmPoolFromTx(tx);
+  if (!dlmmPool) {
+    return;
+  }
+
+  if (seenDlmmPools.has(dlmmPool.poolAddress)) {
+    return;
+  }
+
+  const gmgn = await fetchGmgnTokenWithRetry(dlmmPool.nonSolMint);
+  const volume =
+    toNumber(gmgn?.price?.volume_5m) ??
+    toNumber(gmgn?.price?.volume_1m) ??
+    toNumber(gmgn?.liquidity) ??
+    0;
+
+  if (volume < NEW_DLMM_POOL_MIN_VOLUME) {
+    console.log(
+      `[dlmm-pool] skip pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} volume=${fmtNum(volume)}`,
+    );
+    return;
+  }
+
+  seenDlmmPools.set(dlmmPool.poolAddress, Date.now());
+  console.log(
+    `[dlmm-pool] alert pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} volume=${fmtNum(volume)}`,
+  );
+  await sendNewDlmmPoolTelegramAlert(signature, dlmmPool, gmgn, volume);
+}
+
+function extractNewDlmmPoolFromTx(tx: ParsedTransaction): {
+  poolAddress: string;
+  nonSolMint: string;
+  tokenXMint: string;
+  tokenYMint: string;
+  creator: string | null;
+} | null {
+  const instructions = tx.transaction.message.instructions ?? [];
+  const accountKeys = (tx.transaction.message.accountKeys ?? []).map((k) =>
+    typeof k === "string" ? k : k.pubkey,
+  );
+  const creator = accountKeys[0] ?? null;
+
+  for (const ix of instructions) {
+    if (ix.programId !== DLMM_PROGRAM_ID) {
+      continue;
+    }
+    const data = ix.data ?? "";
+    if (!data) {
+      continue;
+    }
+    let hex = "";
+    try {
+      hex = Buffer.from(data, "base64").subarray(0, 8).toString("hex");
+    } catch {
+      continue;
+    }
+    if (hex !== DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX) {
+      continue;
+    }
+
+    const poolAddress = ix.accounts?.[0];
+    const tokenXMint = ix.accounts?.[2];
+    const tokenYMint = ix.accounts?.[3];
+    if (!poolAddress || !tokenXMint || !tokenYMint) {
+      continue;
+    }
+
+    const nonSolMint = tokenXMint === SOL_MINT ? tokenYMint : tokenXMint;
+    if (!nonSolMint || nonSolMint === SOL_MINT) {
+      continue;
+    }
+
+    return {
+      poolAddress,
+      nonSolMint,
+      tokenXMint,
+      tokenYMint,
+      creator,
+    };
+  }
+
+  return null;
 }
 
 async function processTrendingTick(): Promise<void> {
@@ -2131,6 +2241,59 @@ async function sendTrendingTelegramAlert(
   }
 }
 
+async function sendNewDlmmPoolTelegramAlert(
+  signature: string,
+  pool: {
+    poolAddress: string;
+    nonSolMint: string;
+    tokenXMint: string;
+    tokenYMint: string;
+    creator: string | null;
+  },
+  gmgn: GmgnToken | null,
+  volume: number,
+): Promise<void> {
+  const gmgnLink = `https://gmgn.ai/sol/token/${pool.nonSolMint}`;
+  const dlmmLink = `https://app.meteora.ag/dlmm/${pool.poolAddress}`;
+  const solscanTxLink = `https://solscan.io/tx/${signature}`;
+  const pairLabel =
+    gmgn?.symbol
+      ? `${gmgn.symbol} / SOL`
+      : `${shortenAddress(pool.nonSolMint)} / SOL`;
+  const text = [
+    `<b>New DLMM Pool</b>`,
+    `Pool: ${escapeHtml(pairLabel)}`,
+    `DLMM Pool: <code>${escapeHtml(pool.poolAddress)}</code>`,
+    `Token: <code>${escapeHtml(pool.nonSolMint)}</code>`,
+    ...(pool.creator ? [`Creator: <code>${escapeHtml(pool.creator)}</code>`] : []),
+    `Volume: ${fmtNum(volume)}`,
+    `Liquidity: ${fmtNum(toNumber(gmgn?.liquidity))}`,
+    `MC: ${fmtNum(toNumber(gmgn?.market_cap) ?? toNumber(gmgn?.marketcap) ?? toNumber(gmgn?.fdv))}`,
+    "",
+    `<u>Quick Action</u>`,
+    `<a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanTxLink}">TX</a>`,
+  ].join("\n");
+
+  const payloadBase = buildTelegramPayloadBase("new_dlmm_pool");
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payloadBase,
+        text,
+        disable_web_page_preview: true,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`telegram new dlmm pool send failed: ${res.status} ${body}`);
+  }
+}
+
 async function sendLpWalletTrackerAlert(
   position: TrackedWalletPosition,
 ): Promise<void> {
@@ -2548,7 +2711,9 @@ function buildTelegramPayloadBase(alertKind: AlertKind): {
       ? TELEGRAM_TRENDING_THREAD_ID
       : alertKind === "lp_wallet_tracker"
         ? TELEGRAM_LP_WALLET_THREAD_ID
-        : TELEGRAM_MIGRATION_THREAD_ID;
+        : alertKind === "new_dlmm_pool"
+          ? TELEGRAM_MIGRATION_THREAD_ID
+          : TELEGRAM_MIGRATION_THREAD_ID;
 
   return {
     chat_id: TELEGRAM_CHAT_ID,

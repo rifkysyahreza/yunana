@@ -30,9 +30,11 @@ npm install
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - Optional: `TELEGRAM_ALLOWED_USER_ID` (only accept Telegram bot commands from this sender id)
-- Optional: `TELEGRAM_MIGRATION_THREAD_ID` (Telegram forum topic id for migration alerts)
+- Optional: `TELEGRAM_MIGRATION_THREAD_ID` (Telegram forum topic id for migration / new DLMM pool alerts)
 - Optional: `TELEGRAM_TRENDING_THREAD_ID` (Telegram forum topic id for GMGN trending alerts)
 - Optional: `TELEGRAM_LP_WALLET_THREAD_ID` (Telegram forum topic id for LP wallet tracker alerts)
+- Optional: `ENABLE_NEW_DLMM_POOL_TRACKER` (monitor new Meteora DLMM pools from `initialize_lb_pair2`)
+- Optional: `NEW_DLMM_POOL_MIN_VOLUME` (minimum volume needed before a new DLMM pool alert is sent)
 - `WATCH_ADDRESSES` (comma-separated Solana addresses to monitor)
 - Optional: `WATCH_PROGRAM_IDS` (comma-separated program IDs for stronger bonding/migration filtering)
 - Optional: `SCAN_INTERVAL_MS` (default `15000`)
