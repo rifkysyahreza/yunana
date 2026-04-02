@@ -45,6 +45,13 @@ type EarlyDlmmPositionRow = {
   pubkey?: string;
 };
 
+type ProgramAccountInfo = {
+  pubkey: string;
+  account: {
+    data?: [string, string] | string;
+  };
+};
+
 type SignatureInfo = {
   signature: string;
   err: unknown;
@@ -337,6 +344,7 @@ const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
 const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "";
 const SHYFT_API_KEY = process.env.SHYFT_API_KEY?.trim() ?? "";
+const DLMM_PROGRAM_ID = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
 const TELEGRAM_EARLY_DLMM_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_EARLY_DLMM_THREAD_ID,
 );
@@ -2381,6 +2389,52 @@ async function startTelegramPingListener(): Promise<void> {
   }, 5000);
 }
 
+async function fetchDlmmPositionsByRpc(
+  poolAddress: string,
+): Promise<EarlyDlmmPositionRow[]> {
+  const accounts = await rpcCall<ProgramAccountInfo[]>("getProgramAccounts", [
+    DLMM_PROGRAM_ID,
+    {
+      encoding: "base64",
+      withContext: false,
+      filters: [
+        {
+          memcmp: {
+            offset: 8,
+            bytes: poolAddress,
+          },
+        },
+      ],
+    },
+  ]);
+
+  const rows: EarlyDlmmPositionRow[] = [];
+  for (const account of accounts ?? []) {
+    const raw = Array.isArray(account.account?.data)
+      ? account.account.data[0]
+      : typeof account.account?.data === "string"
+        ? account.account.data
+        : null;
+    if (!raw) {
+      continue;
+    }
+    const buf = Buffer.from(raw, "base64");
+    if (buf.length < 72) {
+      continue;
+    }
+    const lbPair = encodeBase58(buf.subarray(8, 40));
+    if (lbPair !== poolAddress) {
+      continue;
+    }
+    const owner = encodeBase58(buf.subarray(40, 72));
+    rows.push({
+      owner,
+      pubkey: account.pubkey,
+    });
+  }
+  return rows;
+}
+
 async function fetchShyftDlmmPositionsByTable(
   poolAddress: string,
   tableName: "meteora_dlmm_Position" | "meteora_dlmm_PositionV2",
@@ -2663,23 +2717,27 @@ async function handleEarlyDlmmCommand(
 async function fetchEarlyDlmmWallets(
   poolAddress: string,
 ): Promise<EarlyDlmmWalletResult> {
-  if (!SHYFT_API_KEY) {
-    throw new Error("missing SHYFT_API_KEY");
+  let positions = await fetchDlmmPositionsByRpc(poolAddress);
+
+  if (positions.length === 0 && SHYFT_API_KEY) {
+    const [positionsV1, positionsV2] = await Promise.all([
+      fetchShyftDlmmPositionsByTable(poolAddress, "meteora_dlmm_Position"),
+      fetchShyftDlmmPositionsByTable(poolAddress, "meteora_dlmm_PositionV2"),
+    ]);
+
+    console.log(
+      `[early-dlmm] pool=${poolAddress} rpc_positions=0 shyft_positions_v1=${positionsV1.length} shyft_positions_v2=${positionsV2.length}`,
+    );
+
+    positions = [
+      ...positionsV1,
+      ...positionsV2,
+    ];
+  } else {
+    console.log(
+      `[early-dlmm] pool=${poolAddress} rpc_positions=${positions.length}`,
+    );
   }
-
-  const [positionsV1, positionsV2] = await Promise.all([
-    fetchShyftDlmmPositionsByTable(poolAddress, "meteora_dlmm_Position"),
-    fetchShyftDlmmPositionsByTable(poolAddress, "meteora_dlmm_PositionV2"),
-  ]);
-
-  const positions: EarlyDlmmPositionRow[] = [
-    ...positionsV1,
-    ...positionsV2,
-  ];
-
-  console.log(
-    `[early-dlmm] pool=${poolAddress} shyft_positions_v1=${positionsV1.length} shyft_positions_v2=${positionsV2.length}`,
-  );
 
   const earliestByWallet = new Map<string, number>();
   for (const position of positions) {
