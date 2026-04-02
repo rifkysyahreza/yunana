@@ -2393,7 +2393,7 @@ async function startTelegramPingListener(): Promise<void> {
 async function fetchHistoricalEarlyDlmmWallets(
   poolAddress: string,
 ): Promise<{ wallets: string[]; poolCreator: string | null }> {
-  const signatures = await collectHistoricalPoolSignatures(poolAddress, 500);
+  const signatures = await collectHistoricalPoolSignatures(poolAddress, 120);
   const uniqueWallets = new Set<string>();
   let poolCreator: string | null = null;
 
@@ -2402,6 +2402,7 @@ async function fetchHistoricalEarlyDlmmWallets(
       continue;
     }
     const tx = await getParsedTransaction(signatureInfo.signature);
+    await sleep(120);
     if (!tx) {
       continue;
     }
@@ -2946,26 +2947,38 @@ async function rpcCall<T>(
   method: string,
   params: unknown[],
 ): Promise<T | null> {
-  const res = await fetch(HELIUS_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method,
-      params,
-    }),
-  });
+  const maxAttempts = 4;
+  let lastStatus: number | null = null;
 
-  if (!res.ok) {
-    throw new Error(`rpc http error ${res.status}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const res = await fetch(HELIUS_RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+      }),
+    });
+
+    if (res.ok) {
+      const json = (await res.json()) as JsonRpcResponse<T>;
+      if (json.error) {
+        throw new Error(`rpc ${method} error: ${json.error.message}`);
+      }
+      return json.result ?? null;
+    }
+
+    lastStatus = res.status;
+    if (res.status !== 429 || attempt === maxAttempts) {
+      throw new Error(`rpc http error ${res.status}`);
+    }
+
+    await sleep(400 * attempt);
   }
 
-  const json = (await res.json()) as JsonRpcResponse<T>;
-  if (json.error) {
-    throw new Error(`rpc ${method} error: ${json.error.message}`);
-  }
-  return json.result ?? null;
+  throw new Error(`rpc http error ${lastStatus ?? "unknown"}`);
 }
 
 function buildTelegramPayloadBase(alertKind: AlertKind): {
