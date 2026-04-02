@@ -31,6 +31,7 @@ type EarlyDlmmWalletResult = {
   source: string;
   poolResolved: boolean;
   poolCreator: string | null;
+  historicalFound: boolean;
 };
 
 type ShyftGraphqlPositionsResponse = {
@@ -2493,10 +2494,19 @@ function classifyHistoricalDlmmTx(
     return { kind: "pool_creator", wallet: firstSigner };
   }
 
-  const hasGoToABin = logMessages.some((line) =>
-    line.includes("Instruction: GoToABin"),
+  const entrySignals = [
+    "Instruction: GoToABin",
+    "Instruction: AddLiquidity",
+    "Instruction: AddLiquidityByStrategy",
+    "Instruction: InitializePosition",
+    "Instruction: InitializePositionByOperator",
+    "Instruction: InitializePositionPda",
+    "Instruction: InitializePositionV2",
+  ];
+  const hasEntrySignal = entrySignals.some((signal) =>
+    logMessages.some((line) => line.includes(signal)),
   );
-  if (hasGoToABin) {
+  if (hasEntrySignal) {
     return { kind: "go_to_a_bin", wallet: firstSigner };
   }
 
@@ -2800,8 +2810,12 @@ async function handleEarlyDlmmCommand(
       ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
       : result.poolResolved
         ? [
-            "No indexed DLMM positions found yet.",
-            "This pool may be very new, or indexed position data may still be catching up.",
+            result.historicalFound
+              ? "No historical early-entry wallets found yet."
+              : "No indexed DLMM positions found yet.",
+            result.historicalFound
+              ? "Historical scan did not find a strong entrant signal for this pool yet."
+              : "This pool may be very new, or indexed position data may still be catching up.",
             "Try again shortly.",
           ]
         : [
@@ -2876,6 +2890,7 @@ async function fetchEarlyDlmmWallets(
     .slice(0, 10)
     .map(([wallet]) => wallet);
 
+  const historicalFound = Boolean(historical.poolCreator) || historical.wallets.length > 0;
   const wallets = historical.wallets.length > 0 ? historical.wallets : positionWallets;
 
   const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
@@ -2904,9 +2919,10 @@ async function fetchEarlyDlmmWallets(
     poolBinLabel,
     poolAddress,
     wallets,
-    source: "historical_rpc",
+    source: historical.wallets.length > 0 ? "historical_rpc" : "rpc_positions",
     poolResolved: Boolean(poolMeta) || positions.length > 0,
     poolCreator: historical.poolCreator,
+    historicalFound,
   };
 }
 
