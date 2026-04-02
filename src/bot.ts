@@ -2413,14 +2413,14 @@ async function fetchHistoricalEarlyDlmmWallets(
 
     if (classification.kind === "pool_creator") {
       poolCreator = poolCreator ?? classification.wallet;
-      continue;
     }
 
     if (classification.kind === "go_to_a_bin") {
       uniqueWallets.add(classification.wallet);
-      if (uniqueWallets.size >= 10) {
-        break;
-      }
+    }
+
+    if (poolCreator && uniqueWallets.size >= 10) {
+      break;
     }
   }
 
