@@ -32,6 +32,7 @@ type EarlyDlmmWalletResult = {
   poolResolved: boolean;
   poolCreator: string | null;
   historicalFound: boolean;
+  creatorFound: boolean;
 };
 
 type ShyftGraphqlPositionsResponse = {
@@ -2394,7 +2395,7 @@ async function startTelegramPingListener(): Promise<void> {
 async function fetchHistoricalEarlyDlmmWallets(
   poolAddress: string,
 ): Promise<{ wallets: string[]; poolCreator: string | null }> {
-  const signatures = await collectHistoricalPoolSignatures(poolAddress, 120);
+  const signatures = await collectHistoricalPoolSignatures(poolAddress, 300);
   const uniqueWallets = new Set<string>();
   let poolCreator: string | null = null;
 
@@ -2810,12 +2811,12 @@ async function handleEarlyDlmmCommand(
       ? result.wallets.map((wallet, idx) => `${idx + 1}. ${wallet}`)
       : result.poolResolved
         ? [
-            result.historicalFound
+            result.creatorFound
               ? "No historical early-entry wallets found yet."
-              : "No indexed DLMM positions found yet.",
-            result.historicalFound
+              : "Pool creator not found in current historical scan window.",
+            result.creatorFound
               ? "Historical scan did not find a strong entrant signal for this pool yet."
-              : "This pool may be very new, or indexed position data may still be catching up.",
+              : "The fallback list may only reflect currently open positions, not the real earliest wallets.",
             "Try again shortly.",
           ]
         : [
@@ -2891,6 +2892,7 @@ async function fetchEarlyDlmmWallets(
     .map(([wallet]) => wallet);
 
   const historicalFound = Boolean(historical.poolCreator) || historical.wallets.length > 0;
+  const creatorFound = Boolean(historical.poolCreator);
   const wallets = historical.wallets.length > 0 ? historical.wallets : positionWallets;
 
   const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
@@ -2923,6 +2925,7 @@ async function fetchEarlyDlmmWallets(
     poolResolved: Boolean(poolMeta) || positions.length > 0,
     poolCreator: historical.poolCreator,
     historicalFound,
+    creatorFound,
   };
 }
 
