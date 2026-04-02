@@ -30,6 +30,7 @@ type EarlyDlmmWalletResult = {
   wallets: string[];
   source: string;
   poolResolved: boolean;
+  poolCreator: string | null;
 };
 
 type ShyftGraphqlPositionsResponse = {
@@ -2391,9 +2392,10 @@ async function startTelegramPingListener(): Promise<void> {
 
 async function fetchHistoricalEarlyDlmmWallets(
   poolAddress: string,
-): Promise<string[]> {
+): Promise<{ wallets: string[]; poolCreator: string | null }> {
   const signatures = await collectHistoricalPoolSignatures(poolAddress, 500);
   const uniqueWallets = new Set<string>();
+  let poolCreator: string | null = null;
 
   for (const signatureInfo of signatures) {
     if (signatureInfo.err) {
@@ -2403,21 +2405,33 @@ async function fetchHistoricalEarlyDlmmWallets(
     if (!tx) {
       continue;
     }
-    const wallet = extractHistoricalDlmmEntrant(tx, poolAddress);
-    if (!wallet) {
+
+    const classification = classifyHistoricalDlmmTx(tx, poolAddress);
+    if (!classification) {
       continue;
     }
-    uniqueWallets.add(wallet);
-    if (uniqueWallets.size >= 10) {
-      break;
+
+    if (classification.kind === "pool_creator") {
+      poolCreator = poolCreator ?? classification.wallet;
+      continue;
+    }
+
+    if (classification.kind === "go_to_a_bin") {
+      uniqueWallets.add(classification.wallet);
+      if (uniqueWallets.size >= 10) {
+        break;
+      }
     }
   }
 
   console.log(
-    `[early-dlmm] pool=${poolAddress} historical_wallets=${uniqueWallets.size} scanned_signatures=${signatures.length}`,
+    `[early-dlmm] pool=${poolAddress} historical_wallets=${uniqueWallets.size} pool_creator=${poolCreator ?? "none"} scanned_signatures=${signatures.length}`,
   );
 
-  return [...uniqueWallets];
+  return {
+    wallets: [...uniqueWallets],
+    poolCreator,
+  };
 }
 
 async function collectHistoricalPoolSignatures(
@@ -2445,10 +2459,10 @@ async function collectHistoricalPoolSignatures(
   return all.reverse();
 }
 
-function extractHistoricalDlmmEntrant(
+function classifyHistoricalDlmmTx(
   tx: ParsedTransaction,
   poolAddress: string,
-): string | null {
+): { kind: "pool_creator" | "go_to_a_bin"; wallet: string } | null {
   const accountKeys = tx.transaction?.message?.accountKeys ?? [];
   const normalizedKeys = accountKeys.map((key) =>
     typeof key === "string" ? key : key?.pubkey,
@@ -2465,9 +2479,24 @@ function extractHistoricalDlmmEntrant(
     return null;
   }
 
+  const logMessages = tx.meta?.logMessages ?? [];
   const firstSigner = normalizedKeys[0]?.trim();
-  if (firstSigner && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(firstSigner)) {
-    return firstSigner;
+  if (!firstSigner || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(firstSigner)) {
+    return null;
+  }
+
+  const hasInitializeLbPair2 = logMessages.some((line) =>
+    line.includes("Instruction: InitializeLbPair2"),
+  );
+  if (hasInitializeLbPair2) {
+    return { kind: "pool_creator", wallet: firstSigner };
+  }
+
+  const hasGoToABin = logMessages.some((line) =>
+    line.includes("Instruction: GoToABin"),
+  );
+  if (hasGoToABin) {
+    return { kind: "go_to_a_bin", wallet: firstSigner };
   }
 
   return null;
@@ -2783,7 +2812,9 @@ async function handleEarlyDlmmCommand(
       `Early DLMM Wallets`,
       `Pool: ${headerPool}`,
       `DLMM Pool: <code>${escapeHtml(result.poolAddress)}</code>`,
-      "",
+      ...(result.poolCreator
+        ? [`Pool Creator: <code>${escapeHtml(result.poolCreator)}</code>`, ""]
+        : [""]),
       ...(result.wallets.length > 0
         ? result.wallets.map((wallet, idx) => `${idx + 1}. <code>${escapeHtml(wallet)}</code>`)
         : bodyLines),
@@ -2801,7 +2832,7 @@ async function handleEarlyDlmmCommand(
 async function fetchEarlyDlmmWallets(
   poolAddress: string,
 ): Promise<EarlyDlmmWalletResult> {
-  const historicalWallets = await fetchHistoricalEarlyDlmmWallets(poolAddress);
+  const historical = await fetchHistoricalEarlyDlmmWallets(poolAddress);
 
   let positions = await fetchDlmmPositionsByRpc(poolAddress);
 
@@ -2844,7 +2875,7 @@ async function fetchEarlyDlmmWallets(
     .slice(0, 10)
     .map(([wallet]) => wallet);
 
-  const wallets = historicalWallets.length > 0 ? historicalWallets : positionWallets;
+  const wallets = historical.wallets.length > 0 ? historical.wallets : positionWallets;
 
   const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
   const pairLabel =
@@ -2872,8 +2903,9 @@ async function fetchEarlyDlmmWallets(
     poolBinLabel,
     poolAddress,
     wallets,
-    source: "shyft_graphql",
+    source: "historical_rpc",
     poolResolved: Boolean(poolMeta) || positions.length > 0,
+    poolCreator: historical.poolCreator,
   };
 }
 
