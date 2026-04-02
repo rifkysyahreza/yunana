@@ -59,6 +59,8 @@ type GmgnToken = {
   address: string;
   symbol?: string;
   name?: string;
+  volume_1m?: string | number;
+  volume_5m?: string | number;
   banner?: string;
   holder_count?: string | number;
   liquidity?: string | number;
@@ -331,6 +333,9 @@ const TELEGRAM_TRENDING_THREAD_ID = parseOptionalNumber(
 );
 const TELEGRAM_LP_WALLET_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_LP_WALLET_THREAD_ID,
+);
+const TELEGRAM_NEW_DLMM_POOL_THREAD_ID = parseOptionalNumber(
+  process.env.TELEGRAM_NEW_DLMM_POOL_THREAD_ID,
 );
 const BOT_STARTED_AT = Date.now();
 const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX = "493b2478ed536cc6";
@@ -810,24 +815,31 @@ async function processNewDlmmPoolSignature(
   }
 
   const gmgn = await fetchGmgnTokenWithRetry(dlmmPool.nonSolMint);
-  const volume =
-    toNumber(gmgn?.price?.volume_5m) ??
-    toNumber(gmgn?.price?.volume_1m) ??
-    toNumber(gmgn?.liquidity) ??
-    0;
+  const volume5m = toNumber(gmgn?.price?.volume_5m) ?? toNumber(gmgn?.volume_5m) ?? 0;
+  const volume1m = toNumber(gmgn?.price?.volume_1m) ?? toNumber(gmgn?.volume_1m) ?? 0;
+  const liquidity = toNumber(gmgn?.liquidity) ?? 0;
+  const marketCap =
+    toNumber(gmgn?.market_cap) ?? toNumber(gmgn?.marketcap) ?? toNumber(gmgn?.fdv) ?? 0;
+  const buys1m = gmgn?.price?.buys_1m ?? 0;
+  const sells1m = gmgn?.price?.sells_1m ?? 0;
+  const hasActivity =
+    volume5m >= NEW_DLMM_POOL_MIN_VOLUME &&
+    liquidity > 0 &&
+    marketCap > 0 &&
+    (buys1m > 0 || sells1m > 0 || volume1m > 0);
 
-  if (volume < NEW_DLMM_POOL_MIN_VOLUME) {
+  if (!hasActivity) {
     console.log(
-      `[dlmm-pool] skip pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} volume=${fmtNum(volume)}`,
+      `[dlmm-pool] skip pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} vol5m=${fmtNum(volume5m)} vol1m=${fmtNum(volume1m)} liq=${fmtNum(liquidity)} mc=${fmtNum(marketCap)}`,
     );
     return;
   }
 
   seenDlmmPools.set(dlmmPool.poolAddress, Date.now());
   console.log(
-    `[dlmm-pool] alert pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} volume=${fmtNum(volume)}`,
+    `[dlmm-pool] alert pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} vol5m=${fmtNum(volume5m)} vol1m=${fmtNum(volume1m)}`,
   );
-  await sendNewDlmmPoolTelegramAlert(signature, dlmmPool, gmgn, volume);
+  await sendNewDlmmPoolTelegramAlert(signature, dlmmPool, gmgn, volume5m, volume1m);
 }
 
 function extractNewDlmmPoolFromTx(tx: ParsedTransaction): {
@@ -841,7 +853,7 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction): {
   const accountKeys = (tx.transaction.message.accountKeys ?? []).map((k) =>
     typeof k === "string" ? k : k.pubkey,
   );
-  const creator = accountKeys[0] ?? null;
+  const creator = extractSignerFromAccountKeys(tx.transaction?.message?.accountKeys ?? []);
 
   for (const ix of instructions) {
     if (ix.programId !== DLMM_PROGRAM_ID) {
@@ -2251,22 +2263,21 @@ async function sendNewDlmmPoolTelegramAlert(
     creator: string | null;
   },
   gmgn: GmgnToken | null,
-  volume: number,
+  volume5m: number,
+  volume1m: number,
 ): Promise<void> {
   const gmgnLink = `https://gmgn.ai/sol/token/${pool.nonSolMint}`;
   const dlmmLink = `https://app.meteora.ag/dlmm/${pool.poolAddress}`;
   const solscanTxLink = `https://solscan.io/tx/${signature}`;
-  const pairLabel =
-    gmgn?.symbol
-      ? `${gmgn.symbol} / SOL`
-      : `${shortenAddress(pool.nonSolMint)} / SOL`;
+  const tokenSymbol = gmgn?.symbol ?? shortenAddress(pool.nonSolMint);
+  const pairLabel = `${tokenSymbol} / SOL`;
   const text = [
     `<b>New DLMM Pool</b>`,
     `Pool: ${escapeHtml(pairLabel)}`,
     `DLMM Pool: <code>${escapeHtml(pool.poolAddress)}</code>`,
     `Token: <code>${escapeHtml(pool.nonSolMint)}</code>`,
     ...(pool.creator ? [`Creator: <code>${escapeHtml(pool.creator)}</code>`] : []),
-    `Volume: ${fmtNum(volume)}`,
+    `Vol 5m: ${fmtNum(volume5m)} | Vol 1m: ${fmtNum(volume1m)}`,
     `Liquidity: ${fmtNum(toNumber(gmgn?.liquidity))}`,
     `MC: ${fmtNum(toNumber(gmgn?.market_cap) ?? toNumber(gmgn?.marketcap) ?? toNumber(gmgn?.fdv))}`,
     "",
@@ -2712,7 +2723,7 @@ function buildTelegramPayloadBase(alertKind: AlertKind): {
       : alertKind === "lp_wallet_tracker"
         ? TELEGRAM_LP_WALLET_THREAD_ID
         : alertKind === "new_dlmm_pool"
-          ? TELEGRAM_MIGRATION_THREAD_ID
+          ? TELEGRAM_NEW_DLMM_POOL_THREAD_ID
           : TELEGRAM_MIGRATION_THREAD_ID;
 
   return {
@@ -2720,6 +2731,23 @@ function buildTelegramPayloadBase(alertKind: AlertKind): {
     parse_mode: "HTML",
     ...(messageThreadId !== null ? { message_thread_id: messageThreadId } : {}),
   };
+}
+
+function extractSignerFromAccountKeys(
+  accountKeys: Array<string | { pubkey: string; signer?: boolean }>,
+): string | null {
+  for (const key of accountKeys) {
+    if (typeof key === "string") {
+      continue;
+    }
+    if (key?.signer && key.pubkey) {
+      return key.pubkey;
+    }
+  }
+  if (accountKeys.length > 0 && typeof accountKeys[0] !== "string") {
+    return accountKeys[0]?.pubkey ?? null;
+  }
+  return null;
 }
 
 function splitCsv(input: string | undefined): string[] {

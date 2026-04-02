@@ -30,9 +30,10 @@ npm install
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - Optional: `TELEGRAM_ALLOWED_USER_ID` (only accept Telegram bot commands from this sender id)
-- Optional: `TELEGRAM_MIGRATION_THREAD_ID` (Telegram forum topic id for migration / new DLMM pool alerts)
+- Optional: `TELEGRAM_MIGRATION_THREAD_ID` (Telegram forum topic id for migration alerts)
 - Optional: `TELEGRAM_TRENDING_THREAD_ID` (Telegram forum topic id for GMGN trending alerts)
 - Optional: `TELEGRAM_LP_WALLET_THREAD_ID` (Telegram forum topic id for LP wallet tracker alerts)
+- Optional: `TELEGRAM_NEW_DLMM_POOL_THREAD_ID` (Telegram forum topic id for new DLMM pool alerts)
 - Optional: `ENABLE_NEW_DLMM_POOL_TRACKER` (monitor new Meteora DLMM pools from `initialize_lb_pair2`)
 - Optional: `NEW_DLMM_POOL_MIN_VOLUME` (minimum volume needed before a new DLMM pool alert is sent)
 - `WATCH_ADDRESSES` (comma-separated Solana addresses to monitor)
@@ -75,7 +76,7 @@ npm run dev
 - Preferred wallet input is a JSON file like `tracked-lp-wallets.json` (see `tracked-lp-wallets.example.json`); `.env` wallet list is kept as a legacy fallback.
 - The JSON file supports both a simple array format and a richer schema with `version`, `defaults`, and `wallets` entries (plus optional `group`, `priority`, and `notes` per wallet).
 - LP wallet tracker alert format now aims to show compact pool context like `Pool: TOKEN / SOL (100/2%)` and a range like `83.3609 ~ 83.9297 (0.68%)` when enrichment data is available.
-- If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration, trending, and LP wallet tracker alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID`, `TELEGRAM_TRENDING_THREAD_ID`, and `TELEGRAM_LP_WALLET_THREAD_ID`.
+- If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration, trending, LP wallet tracker, and new DLMM pool alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID`, `TELEGRAM_TRENDING_THREAD_ID`, `TELEGRAM_LP_WALLET_THREAD_ID`, and `TELEGRAM_NEW_DLMM_POOL_THREAD_ID`.
 - Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
 - Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.
