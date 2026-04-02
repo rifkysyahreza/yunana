@@ -2389,6 +2389,90 @@ async function startTelegramPingListener(): Promise<void> {
   }, 5000);
 }
 
+async function fetchHistoricalEarlyDlmmWallets(
+  poolAddress: string,
+): Promise<string[]> {
+  const signatures = await collectHistoricalPoolSignatures(poolAddress, 500);
+  const uniqueWallets = new Set<string>();
+
+  for (const signatureInfo of signatures) {
+    if (signatureInfo.err) {
+      continue;
+    }
+    const tx = await getParsedTransaction(signatureInfo.signature);
+    if (!tx) {
+      continue;
+    }
+    const wallet = extractHistoricalDlmmEntrant(tx, poolAddress);
+    if (!wallet) {
+      continue;
+    }
+    uniqueWallets.add(wallet);
+    if (uniqueWallets.size >= 10) {
+      break;
+    }
+  }
+
+  console.log(
+    `[early-dlmm] pool=${poolAddress} historical_wallets=${uniqueWallets.size} scanned_signatures=${signatures.length}`,
+  );
+
+  return [...uniqueWallets];
+}
+
+async function collectHistoricalPoolSignatures(
+  poolAddress: string,
+  maxSignatures: number,
+): Promise<SignatureInfo[]> {
+  const all: SignatureInfo[] = [];
+  let before: string | undefined;
+
+  while (all.length < maxSignatures) {
+    const page = await getSignaturesForAddress(poolAddress, 100, before);
+    if (page.length === 0) {
+      break;
+    }
+    all.push(...page);
+    if (page.length < 100) {
+      break;
+    }
+    before = page[page.length - 1]?.signature;
+    if (!before) {
+      break;
+    }
+  }
+
+  return all.reverse();
+}
+
+function extractHistoricalDlmmEntrant(
+  tx: ParsedTransaction,
+  poolAddress: string,
+): string | null {
+  const accountKeys = tx.transaction?.message?.accountKeys ?? [];
+  const normalizedKeys = accountKeys.map((key) =>
+    typeof key === "string" ? key : key?.pubkey,
+  );
+
+  const touchesPool = normalizedKeys.includes(poolAddress);
+  if (!touchesPool) {
+    return null;
+  }
+
+  const instructions = tx.transaction?.message?.instructions ?? [];
+  const touchesDlmm = instructions.some((ix) => ix.programId === DLMM_PROGRAM_ID);
+  if (!touchesDlmm) {
+    return null;
+  }
+
+  const firstSigner = normalizedKeys[0]?.trim();
+  if (firstSigner && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(firstSigner)) {
+    return firstSigner;
+  }
+
+  return null;
+}
+
 async function fetchDlmmPositionsByRpc(
   poolAddress: string,
 ): Promise<EarlyDlmmPositionRow[]> {
@@ -2717,6 +2801,8 @@ async function handleEarlyDlmmCommand(
 async function fetchEarlyDlmmWallets(
   poolAddress: string,
 ): Promise<EarlyDlmmWalletResult> {
+  const historicalWallets = await fetchHistoricalEarlyDlmmWallets(poolAddress);
+
   let positions = await fetchDlmmPositionsByRpc(poolAddress);
 
   if (positions.length === 0 && SHYFT_API_KEY) {
@@ -2753,10 +2839,12 @@ async function fetchEarlyDlmmWallets(
     }
   }
 
-  const wallets = [...earliestByWallet.entries()]
+  const positionWallets = [...earliestByWallet.entries()]
     .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
     .slice(0, 10)
     .map(([wallet]) => wallet);
+
+  const wallets = historicalWallets.length > 0 ? historicalWallets : positionWallets;
 
   const poolMeta = await fetchMeteoraPoolMeta(poolAddress);
   const pairLabel =
