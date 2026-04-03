@@ -2373,7 +2373,6 @@ async function sendNewDlmmPoolTelegramAlert(
     `Pool: ${escapeHtml(pairLabel)}${pool.presetLabel ? ` (${escapeHtml(pool.presetLabel)})` : ""}`,
     `DLMM Pool: <code>${escapeHtml(pool.poolAddress)}</code>`,
     `Token: <code>${escapeHtml(pool.nonSolMint)}</code>`,
-    ...(pool.presetAddress ? [`Preset: <code>${escapeHtml(pool.presetAddress)}</code>`] : []),
     ...(pool.creator ? [`Creator: <code>${escapeHtml(pool.creator)}</code>`] : []),
     `Vol 5m: ${fmtNum(volume5m)} | Vol 1m: ${fmtNum(volume1m)}`,
     `Liquidity: ${fmtNum(toNumber(gmgn?.liquidity))}`,
