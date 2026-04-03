@@ -876,20 +876,15 @@ async function processNewDlmmPoolSignature(
   const gmgn = await fetchGmgnTokenWithRetry(dlmmPool.nonSolMint);
   const volume5m = toNumber(gmgn?.price?.volume_5m) ?? toNumber(gmgn?.volume_5m) ?? 0;
   const volume1m = toNumber(gmgn?.price?.volume_1m) ?? toNumber(gmgn?.volume_1m) ?? 0;
-  const liquidity = toNumber(gmgn?.liquidity) ?? 0;
-  const marketCap =
-    toNumber(gmgn?.market_cap) ?? toNumber(gmgn?.marketcap) ?? toNumber(gmgn?.fdv) ?? 0;
   const buys1m = gmgn?.price?.buys_1m ?? 0;
   const sells1m = gmgn?.price?.sells_1m ?? 0;
   const hasActivity =
     volume5m >= NEW_DLMM_POOL_MIN_VOLUME &&
-    liquidity > 0 &&
-    marketCap > 0 &&
     (buys1m > 0 || sells1m > 0 || volume1m > 0);
 
   if (!hasActivity) {
     console.log(
-      `[dlmm-pool] skip pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} vol5m=${fmtNum(volume5m)} vol1m=${fmtNum(volume1m)} liq=${fmtNum(liquidity)} mc=${fmtNum(marketCap)}`,
+      `[dlmm-pool] skip pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} vol5m=${fmtNum(volume5m)} vol1m=${fmtNum(volume1m)}`,
     );
     return;
   }
