@@ -325,6 +325,22 @@ const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
 const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "";
 const DLMM_PROGRAM_ID = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
+const DLMM_PRESET_TIER_1 = [
+  "96y1FmgUx2oxqKMx4j7RtqzJ8JPvgNQGrD47WgXJNxs6", // 80/1%
+  "CrZUmJzkSs4TWg8GpCq5UGRX4ryRYHYYVQQ4dNMYo1GW", // 100/1%
+  "8ntXSqN6fm6TtWq46yKxXXz5T85jRsj2WxnwLs4JMk64", // 100/2%
+  "2yaMAhHyTqrxxf5rfJb6UCidX6ziU215iA3N4U3KiE1T", // 100/3%
+  "39eqLC7ZRSUMnW7a7BBNY6SmVCMkhydbd4w9vrqnTQPz", // 125/5%
+  "CtaYFvWNW443XaZSRTbbC61U8xXyEYnxud1LzwwdTdSP", // 125/10%
+  "45XUmSQSDVeX9JE9E47LY3J813Nu3Eccne45Pe3dihAq", // 200/2%
+];
+const DLMM_PRESET_TIER_2 = [
+  "9L9JeZqkoEUiYaXoxZ7sCurcpMEZzz1VpReUfcooKzQa", // 100/5%
+  "7pz5PW7scE1kZ1FPMDrfpRomD1nUfs3g14nk9Vbjyypq", // 400/5%
+  "7d2HWe816DxGGtcB4PaYPDBmo1Tt6PyoeQQVWEhXn3fS", // 80/2%
+  "CrXRfsV5PJFZrKGrZPjz5GifN1UNRYq6LXTsmSxdNMHP", // 200/10%
+  "4vP4DFDJLRz85NBCfJALYPNdieWwzQSstrUuTms1gekn", // 250/2%
+];
 const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_MIGRATION_THREAD_ID,
 );
@@ -390,6 +406,8 @@ const LP_WALLET_TRACKER_INTERVAL_MS = Number(
 const NEW_DLMM_POOL_MIN_VOLUME = Number(
   process.env.NEW_DLMM_POOL_MIN_VOLUME ?? "5000",
 );
+const NEW_DLMM_POOL_TIER1_INTERVAL_MS = 20000;
+const NEW_DLMM_POOL_TIER2_INTERVAL_MS = 40000;
 const LP_WALLET_ENRICHMENT_RETRY_COUNT = Number(
   process.env.LP_WALLET_ENRICHMENT_RETRY_COUNT ?? "3",
 );
@@ -500,7 +518,7 @@ async function main(): Promise<void> {
     `[boot] lp wallet tracker enabled=${ENABLE_LP_WALLET_TRACKER} interval=${LP_WALLET_TRACKER_INTERVAL_MS}ms wallets=${LP_TRACKED_WALLETS.length}`,
   );
   console.log(
-    `[boot] new dlmm pool tracker enabled=${ENABLE_NEW_DLMM_POOL_TRACKER} min_volume=${NEW_DLMM_POOL_MIN_VOLUME}`,
+    `[boot] new dlmm pool tracker enabled=${ENABLE_NEW_DLMM_POOL_TRACKER} min_volume=${NEW_DLMM_POOL_MIN_VOLUME} tier1=${NEW_DLMM_POOL_TIER1_INTERVAL_MS}ms tier2=${NEW_DLMM_POOL_TIER2_INTERVAL_MS}ms`,
   );
   console.log(
     `[boot] lp enrichment retry count=${LP_WALLET_ENRICHMENT_RETRY_COUNT} delay=${LP_WALLET_ENRICHMENT_RETRY_DELAY_MS}ms`,
@@ -595,7 +613,26 @@ async function scanTick(): Promise<void> {
       await scanAddress(address);
     }
     if (ENABLE_NEW_DLMM_POOL_TRACKER) {
-      await scanAddress(DLMM_PROGRAM_ID);
+      const tier1EveryTicks = Math.max(
+        1,
+        Math.round(NEW_DLMM_POOL_TIER1_INTERVAL_MS / SCAN_INTERVAL_MS),
+      );
+      const tier2EveryTicks = Math.max(
+        1,
+        Math.round(NEW_DLMM_POOL_TIER2_INTERVAL_MS / SCAN_INTERVAL_MS),
+      );
+
+      if (tickCounter % tier1EveryTicks === 0) {
+        for (const address of DLMM_PRESET_TIER_1) {
+          await scanAddress(address);
+        }
+      }
+
+      if (tickCounter % tier2EveryTicks === 0) {
+        for (const address of DLMM_PRESET_TIER_2) {
+          await scanAddress(address);
+        }
+      }
     }
     if (
       ENABLE_GMGN_TRENDING &&
