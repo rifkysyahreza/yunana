@@ -355,6 +355,7 @@ const TELEGRAM_NEW_DLMM_POOL_THREAD_ID = parseOptionalNumber(
 );
 const BOT_STARTED_AT = Date.now();
 const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX = "493b2478ed536cc6";
+const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX_ALT = "dfab05ba75a6ad57";
 
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS ?? "15000");
 const FORWARD_ALL_MIGRATED =
@@ -535,6 +536,7 @@ async function main(): Promise<void> {
 
   await bootstrapCursors();
   await bootstrapTrackedLpWalletPositions();
+  await bootstrapDlmmPresetMonitor();
   void startTelegramPingListener();
   setInterval(scanTick, SCAN_INTERVAL_MS);
   setInterval(processPendingOutcomes, OUTCOME_POLL_INTERVAL_MS);
@@ -549,6 +551,22 @@ async function bootstrapCursors(): Promise<void> {
       console.log(`[bootstrap] cursor for ${address} = ${sigs[0].signature}`);
     } else {
       console.log(`[bootstrap] no recent signatures for ${address}`);
+    }
+  }
+}
+
+async function bootstrapDlmmPresetMonitor(): Promise<void> {
+  if (!ENABLE_NEW_DLMM_POOL_TRACKER) {
+    return;
+  }
+
+  for (const address of [...DLMM_PRESET_TIER_1, ...DLMM_PRESET_TIER_2]) {
+    const sigs = await getSignaturesForAddress(address, 1);
+    if (sigs[0]?.signature) {
+      newestSignatureByAddress.set(address, sigs[0].signature);
+      console.log(`[bootstrap] dlmm preset cursor for ${address} = ${sigs[0].signature}`);
+    } else {
+      console.log(`[bootstrap] dlmm preset no recent signatures for ${address}`);
     }
   }
 }
@@ -909,9 +927,12 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction, signature?: string): {
       );
       continue;
     }
-    if (hex !== DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX) {
+    if (
+      hex !== DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX &&
+      hex !== DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX_ALT
+    ) {
       console.log(
-        `[dlmm-pool-debug] sig=${signature ?? "unknown"} discriminator_miss got=${hex} expected=${DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX} accounts=${ix.accounts?.length ?? 0}`,
+        `[dlmm-pool-debug] sig=${signature ?? "unknown"} discriminator_miss got=${hex} expected=${DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX}|${DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX_ALT} accounts=${ix.accounts?.length ?? 0}`,
       );
       continue;
     }
