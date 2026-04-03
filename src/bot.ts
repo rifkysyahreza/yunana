@@ -338,6 +338,7 @@ const DLMM_PRESET_TIER_2 = [
   "9L9JeZqkoEUiYaXoxZ7sCurcpMEZzz1VpReUfcooKzQa", // 100/5%
   "7pz5PW7scE1kZ1FPMDrfpRomD1nUfs3g14nk9Vbjyypq", // 400/5%
   "7d2HWe816DxGGtcB4PaYPDBmo1Tt6PyoeQQVWEhXn3fS", // 80/2%
+  "E8MqMkb21uyfg7raP7XtZawAvxNLR4bDB22orwQEUYi1", // 200/5%
   "CrXRfsV5PJFZrKGrZPjz5GifN1UNRYq6LXTsmSxdNMHP", // 200/10%
   "4vP4DFDJLRz85NBCfJALYPNdieWwzQSstrUuTms1gekn", // 250/2%
 ];
@@ -352,6 +353,7 @@ const DLMM_PRESET_LABELS = new Map<string, string>([
   ["9L9JeZqkoEUiYaXoxZ7sCurcpMEZzz1VpReUfcooKzQa", "100/5%"],
   ["7pz5PW7scE1kZ1FPMDrfpRomD1nUfs3g14nk9Vbjyypq", "400/5%"],
   ["7d2HWe816DxGGtcB4PaYPDBmo1Tt6PyoeQQVWEhXn3fS", "80/2%"],
+  ["E8MqMkb21uyfg7raP7XtZawAvxNLR4bDB22orwQEUYi1", "200/5%"],
   ["CrXRfsV5PJFZrKGrZPjz5GifN1UNRYq6LXTsmSxdNMHP", "200/10%"],
   ["4vP4DFDJLRz85NBCfJALYPNdieWwzQSstrUuTms1gekn", "250/2%"],
 ]);
