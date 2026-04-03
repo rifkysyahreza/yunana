@@ -2364,12 +2364,6 @@ async function sendNewDlmmPoolTelegramAlert(
   const solscanTxLink = `https://solscan.io/tx/${signature}`;
   const tokenSymbol = gmgn?.symbol ?? shortenAddress(pool.nonSolMint);
   const pairLabel = `${tokenSymbol} / SOL`;
-  const marketCap =
-    toNumber(gmgn?.market_cap) ??
-    toNumber(gmgn?.marketcap) ??
-    toNumber(gmgn?.fdv) ??
-    toNumber((gmgn as { mc?: string | number } | null)?.mc) ??
-    null;
   const text = [
     `<b>New DLMM Pool</b>`,
     `Pool: ${escapeHtml(pairLabel)}${pool.presetLabel ? ` (${escapeHtml(pool.presetLabel)})` : ""}`,
@@ -2378,7 +2372,6 @@ async function sendNewDlmmPoolTelegramAlert(
     ...(pool.creator ? [`Creator: <code>${escapeHtml(pool.creator)}</code>`] : []),
     `Vol 5m: ${fmtNum(volume5m)} | Vol 1m: ${fmtNum(volume1m)}`,
     `Liquidity: ${fmtNum(toNumber(gmgn?.liquidity))}`,
-    `MC: ${fmtNum(marketCap)}`,
     "",
     `<u>Quick Action</u>`,
     `<a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanTxLink}">TX</a>`,
