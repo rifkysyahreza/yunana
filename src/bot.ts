@@ -341,6 +341,20 @@ const DLMM_PRESET_TIER_2 = [
   "CrXRfsV5PJFZrKGrZPjz5GifN1UNRYq6LXTsmSxdNMHP", // 200/10%
   "4vP4DFDJLRz85NBCfJALYPNdieWwzQSstrUuTms1gekn", // 250/2%
 ];
+const DLMM_PRESET_LABELS = new Map<string, string>([
+  ["96y1FmgUx2oxqKMx4j7RtqzJ8JPvgNQGrD47WgXJNxs6", "80/1%"],
+  ["CrZUmJzkSs4TWg8GpCq5UGRX4ryRYHYYVQQ4dNMYo1GW", "100/1%"],
+  ["8ntXSqN6fm6TtWq46yKxXXz5T85jRsj2WxnwLs4JMk64", "100/2%"],
+  ["2yaMAhHyTqrxxf5rfJb6UCidX6ziU215iA3N4U3KiE1T", "100/3%"],
+  ["39eqLC7ZRSUMnW7a7BBNY6SmVCMkhydbd4w9vrqnTQPz", "125/5%"],
+  ["CtaYFvWNW443XaZSRTbbC61U8xXyEYnxud1LzwwdTdSP", "125/10%"],
+  ["45XUmSQSDVeX9JE9E47LY3J813Nu3Eccne45Pe3dihAq", "200/2%"],
+  ["9L9JeZqkoEUiYaXoxZ7sCurcpMEZzz1VpReUfcooKzQa", "100/5%"],
+  ["7pz5PW7scE1kZ1FPMDrfpRomD1nUfs3g14nk9Vbjyypq", "400/5%"],
+  ["7d2HWe816DxGGtcB4PaYPDBmo1Tt6PyoeQQVWEhXn3fS", "80/2%"],
+  ["CrXRfsV5PJFZrKGrZPjz5GifN1UNRYq6LXTsmSxdNMHP", "200/10%"],
+  ["4vP4DFDJLRz85NBCfJALYPNdieWwzQSstrUuTms1gekn", "250/2%"],
+]);
 const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_MIGRATION_THREAD_ID,
 );
@@ -902,6 +916,8 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction, signature?: string): {
   tokenXMint: string;
   tokenYMint: string;
   creator: string | null;
+  presetAddress: string | null;
+  presetLabel: string | null;
 } | null {
   const instructions = tx.transaction.message.instructions ?? [];
   const accountKeys = (tx.transaction.message.accountKeys ?? []).map((k) =>
@@ -939,6 +955,7 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction, signature?: string): {
     const poolAddress = ix.accounts?.[0];
     const tokenXMint = ix.accounts?.[2];
     const tokenYMint = ix.accounts?.[3];
+    const presetAddress = ix.accounts?.[7] ?? null;
     if (!poolAddress || !tokenXMint || !tokenYMint) {
       console.log(
         `[dlmm-pool-debug] sig=${signature ?? "unknown"} missing_accounts pool=${poolAddress ?? "none"} tokenX=${tokenXMint ?? "none"} tokenY=${tokenYMint ?? "none"}`,
@@ -951,8 +968,9 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction, signature?: string): {
       continue;
     }
 
+    const presetLabel = presetAddress ? DLMM_PRESET_LABELS.get(presetAddress) ?? null : null;
     console.log(
-      `[dlmm-pool-debug] sig=${signature ?? "unknown"} matched pool=${poolAddress} tokenX=${tokenXMint} tokenY=${tokenYMint} nonSol=${nonSolMint} creator=${creator ?? "none"}`,
+      `[dlmm-pool-debug] sig=${signature ?? "unknown"} matched pool=${poolAddress} tokenX=${tokenXMint} tokenY=${tokenYMint} nonSol=${nonSolMint} creator=${creator ?? "none"} preset=${presetAddress ?? "none"} preset_label=${presetLabel ?? "unknown"}`,
     );
     return {
       poolAddress,
@@ -960,6 +978,8 @@ function extractNewDlmmPoolFromTx(tx: ParsedTransaction, signature?: string): {
       tokenXMint,
       tokenYMint,
       creator,
+      presetAddress,
+      presetLabel,
     };
   }
 
@@ -2330,6 +2350,8 @@ async function sendNewDlmmPoolTelegramAlert(
     tokenXMint: string;
     tokenYMint: string;
     creator: string | null;
+    presetAddress: string | null;
+    presetLabel: string | null;
   },
   gmgn: GmgnToken | null,
   volume5m: number,
@@ -2340,15 +2362,22 @@ async function sendNewDlmmPoolTelegramAlert(
   const solscanTxLink = `https://solscan.io/tx/${signature}`;
   const tokenSymbol = gmgn?.symbol ?? shortenAddress(pool.nonSolMint);
   const pairLabel = `${tokenSymbol} / SOL`;
+  const marketCap =
+    toNumber(gmgn?.market_cap) ??
+    toNumber(gmgn?.marketcap) ??
+    toNumber(gmgn?.fdv) ??
+    toNumber((gmgn as { mc?: string | number } | null)?.mc) ??
+    null;
   const text = [
     `<b>New DLMM Pool</b>`,
-    `Pool: ${escapeHtml(pairLabel)}`,
+    `Pool: ${escapeHtml(pairLabel)}${pool.presetLabel ? ` (${escapeHtml(pool.presetLabel)})` : ""}`,
     `DLMM Pool: <code>${escapeHtml(pool.poolAddress)}</code>`,
     `Token: <code>${escapeHtml(pool.nonSolMint)}</code>`,
+    ...(pool.presetAddress ? [`Preset: <code>${escapeHtml(pool.presetAddress)}</code>`] : []),
     ...(pool.creator ? [`Creator: <code>${escapeHtml(pool.creator)}</code>`] : []),
     `Vol 5m: ${fmtNum(volume5m)} | Vol 1m: ${fmtNum(volume1m)}`,
     `Liquidity: ${fmtNum(toNumber(gmgn?.liquidity))}`,
-    `MC: ${fmtNum(toNumber(gmgn?.market_cap) ?? toNumber(gmgn?.marketcap) ?? toNumber(gmgn?.fdv))}`,
+    `MC: ${fmtNum(marketCap)}`,
     "",
     `<u>Quick Action</u>`,
     `<a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanTxLink}">TX</a>`,
