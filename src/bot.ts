@@ -76,6 +76,10 @@ type GmgnToken = {
     price?: string | number;
     price_1m?: string | number;
     price_5m?: string | number;
+    price_high_1m?: string | number;
+    price_high_5m?: string | number;
+    price_low_1m?: string | number;
+    price_low_5m?: string | number;
     buys_1m?: number;
     sells_1m?: number;
     buys_5m?: number;
@@ -795,6 +799,41 @@ async function processPendingOutcomes(): Promise<void> {
     const marketCapStart = pending.row.baseline.marketCap;
     const priceStart = pending.row.baseline.price;
 
+    const marketCapReturnPct =
+      marketCapStart !== null &&
+      observedMarketCap !== null &&
+      marketCapStart > 0
+        ? (observedMarketCap - marketCapStart) / marketCapStart
+        : null;
+    const priceReturnPct =
+      priceStart !== null && observedPrice !== null && priceStart > 0
+        ? (observedPrice - priceStart) / priceStart
+        : null;
+
+    const highPriceCandidates = [
+      toNumber(gmgn?.price?.price_high_1m),
+      toNumber(gmgn?.price?.price_high_5m),
+      observedPrice,
+    ].filter((v): v is number => v !== null);
+    const lowPriceCandidates = [
+      toNumber(gmgn?.price?.price_low_1m),
+      toNumber(gmgn?.price?.price_low_5m),
+      observedPrice,
+    ].filter((v): v is number => v !== null);
+    const maxObservedPrice = highPriceCandidates.length > 0 ? Math.max(...highPriceCandidates) : null;
+    const minObservedPrice = lowPriceCandidates.length > 0 ? Math.min(...lowPriceCandidates) : null;
+    const maxPriceReturnPct =
+      priceStart !== null && maxObservedPrice !== null && priceStart > 0
+        ? (maxObservedPrice - priceStart) / priceStart
+        : priceReturnPct;
+    const minPriceReturnPct =
+      priceStart !== null && minObservedPrice !== null && priceStart > 0
+        ? (minObservedPrice - priceStart) / priceStart
+        : priceReturnPct;
+
+    const maxReturnPct = maxPriceReturnPct ?? marketCapReturnPct;
+    const minReturnPct = minPriceReturnPct ?? marketCapReturnPct;
+
     await logOutcomeRow({
       kind: "outcome",
       loggedAt: new Date().toISOString(),
@@ -805,16 +844,20 @@ async function processPendingOutcomes(): Promise<void> {
       marketCapObserved: observedMarketCap,
       priceStart,
       priceObserved: observedPrice,
-      returnPct:
-        marketCapStart !== null &&
-        observedMarketCap !== null &&
-        marketCapStart > 0
-          ? (observedMarketCap - marketCapStart) / marketCapStart
-          : null,
-      priceReturnPct:
-        priceStart !== null && observedPrice !== null && priceStart > 0
-          ? (observedPrice - priceStart) / priceStart
-          : null,
+      returnPct: marketCapReturnPct,
+      priceReturnPct,
+      maxReturnPctWithinHorizon: maxReturnPct,
+      minReturnPctWithinHorizon: minReturnPct,
+      maxPriceReturnPctWithinHorizon: maxPriceReturnPct,
+      minPriceReturnPctWithinHorizon: minPriceReturnPct,
+      hit30WithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 0.3,
+      hit50WithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 0.5,
+      hit100WithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 1.0,
+      hitMinus30WithinHorizon: (minReturnPct ?? Number.POSITIVE_INFINITY) <= -0.3,
+      hitMinus50WithinHorizon: (minReturnPct ?? Number.POSITIVE_INFINITY) <= -0.5,
+      styleBaseHitWithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 0.3,
+      styleDoubleHitWithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 1.0,
+      styleFailedFastWithinHorizon: (minReturnPct ?? Number.POSITIVE_INFINITY) <= -0.3,
     });
 
     pending.horizonsRemaining.shift();

@@ -58,6 +58,18 @@ export type OutcomeDatasetRow = {
   priceObserved: number | null;
   returnPct: number | null;
   priceReturnPct: number | null;
+  maxReturnPctWithinHorizon: number | null;
+  minReturnPctWithinHorizon: number | null;
+  maxPriceReturnPctWithinHorizon: number | null;
+  minPriceReturnPctWithinHorizon: number | null;
+  hit30WithinHorizon: boolean;
+  hit50WithinHorizon: boolean;
+  hit100WithinHorizon: boolean;
+  hitMinus30WithinHorizon: boolean;
+  hitMinus50WithinHorizon: boolean;
+  styleBaseHitWithinHorizon: boolean;
+  styleDoubleHitWithinHorizon: boolean;
+  styleFailedFastWithinHorizon: boolean;
 };
 
 const DATA_DIR = process.env.RUNTIME_DATA_DIR ?? "runtime-data";
