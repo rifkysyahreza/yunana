@@ -352,44 +352,57 @@ export function scoreScreenFeatures(
 
   let structureScore = 0;
   if (features.twoCandleAvgVolume !== null) {
-    structureScore += clamp(features.twoCandleAvgVolume / 25000, 0, 1.6) * 24;
+    structureScore += clamp(features.twoCandleAvgVolume / 30000, 0, 1.4) * 20;
   }
   if (features.volumePersistenceRatio !== null) {
-    structureScore += clamp(features.volumePersistenceRatio, 0, 1.25) * 14;
+    structureScore += clamp((features.volumePersistenceRatio - 0.35) / 0.9, 0, 1) * 12;
+    structureScore -= clamp((0.45 - features.volumePersistenceRatio) / 0.25, 0, 1) * 8;
   }
   if (features.c0) {
-    structureScore += clamp(features.c0.bodyPctOfRange, 0, 1) * 10;
-    structureScore += clamp(features.c0.closePositionPct, 0, 1) * 8;
-    structureScore -= clamp(features.c0.upperWickPctOfRange, 0, 1) * 8;
+    structureScore += clamp(features.c0.bodyPctOfRange, 0, 1) * 8;
+    structureScore += clamp(features.c0.closePositionPct, 0, 1) * 6;
+    structureScore -= clamp(features.c0.upperWickPctOfRange, 0, 1) * 10;
   }
   if (features.c1) {
-    structureScore += clamp(features.c1.bodyPctOfRange, 0, 1) * 12;
-    structureScore += clamp(features.c1.closePositionPct, 0, 1) * 10;
-    structureScore -= clamp(features.c1.upperWickPctOfRange, 0, 1) * 10;
+    structureScore += clamp(features.c1.bodyPctOfRange, 0, 1) * 10;
+    structureScore += clamp(features.c1.closePositionPct, 0, 1) * 14;
+    structureScore -= clamp(features.c1.upperWickPctOfRange, 0, 1) * 14;
+    if (features.c1.closePositionPct < 0.4) {
+      structureScore -= 8;
+    }
+    if (features.c1.upperWickPctOfRange >= 0.45) {
+      structureScore -= 6;
+    }
   }
   if (features.c2) {
-    structureScore += clamp(features.c2.closePositionPct, 0, 1) * 6;
-    structureScore -= clamp(features.c2.upperWickPctOfRange, 0, 1) * 6;
+    structureScore += clamp(features.c2.closePositionPct, 0, 1) * 4;
+    structureScore -= clamp(features.c2.upperWickPctOfRange, 0, 1) * 8;
   }
 
   let flowScore = 0;
   if (features.buySellRatio1m !== null) {
-    flowScore += clamp(features.buySellRatio1m / 2, 0, 1.7) * 12;
+    flowScore += clamp((features.buySellRatio1m - 0.9) / 0.9, 0, 1.5) * 12;
+    if (features.buySellRatio1m < 0.9) {
+      flowScore -= 6;
+    }
   }
   if (features.buySellRatio5m !== null) {
-    flowScore += clamp(features.buySellRatio5m / 2, 0, 1.6) * 8;
+    flowScore += clamp((features.buySellRatio5m - 0.95) / 0.85, 0, 1.3) * 6;
   }
   if (features.buyVolumeDominance1m !== null) {
-    flowScore += clamp(features.buyVolumeDominance1m, 0, 1) * 12;
+    flowScore += clamp((features.buyVolumeDominance1m - 0.45) / 0.2, 0, 1.2) * 10;
   }
   if (features.buyVolumeDominance5m !== null) {
-    flowScore += clamp(features.buyVolumeDominance5m, 0, 1) * 8;
+    flowScore += clamp((features.buyVolumeDominance5m - 0.45) / 0.2, 0, 1) * 6;
   }
   if (features.momentum1mPct !== null) {
-    flowScore += clamp(features.momentum1mPct * 10, -1, 1.8) * 8;
+    flowScore += clamp(features.momentum1mPct * 8, -1.2, 1.4) * 8;
+    if (features.momentum1mPct < -0.18) {
+      flowScore -= 8;
+    }
   }
   if (features.momentum5mPct !== null) {
-    flowScore += clamp(features.momentum5mPct * 10, -1, 1.5) * 6;
+    flowScore += clamp(features.momentum5mPct * 6, -1, 1.2) * 4;
   }
   if (features.hotLevel !== null) {
     flowScore += clamp(features.hotLevel / 3, 0, 1) * 4;
@@ -400,7 +413,7 @@ export function scoreScreenFeatures(
     features.holderCount > 0
   ) {
     flowScore +=
-      clamp(features.smartWallets / features.holderCount, 0, 0.05) * 120;
+      clamp(features.smartWallets / features.holderCount, 0, 0.04) * 70;
   }
   if (
     features.renownedWallets !== null &&
@@ -408,7 +421,7 @@ export function scoreScreenFeatures(
     features.holderCount > 0
   ) {
     flowScore +=
-      clamp(features.renownedWallets / features.holderCount, 0, 0.05) * 80;
+      clamp(features.renownedWallets / features.holderCount, 0, 0.04) * 50;
   }
   if (features.bluechipOwnerPercentage !== null) {
     flowScore += clamp(features.bluechipOwnerPercentage, 0, 0.03) * 200;
@@ -428,7 +441,7 @@ export function scoreScreenFeatures(
 
   let riskPenalty = 0;
   if (features.top10HolderRate !== null) {
-    riskPenalty += clamp(features.top10HolderRate / 0.25, 0, 2) * 8;
+    riskPenalty += clamp(features.top10HolderRate / 0.28, 0, 2) * 6;
   }
   if (features.creatorHoldRate !== null) {
     riskPenalty += clamp(features.creatorHoldRate / 0.05, 0, 2) * 6;
@@ -440,7 +453,7 @@ export function scoreScreenFeatures(
     riskPenalty += clamp(features.privateVaultHoldRate / 0.05, 0, 2) * 5;
   }
   if (features.topBundlerTraderPercentage !== null) {
-    riskPenalty += clamp(features.topBundlerTraderPercentage / 0.35, 0, 2) * 8;
+    riskPenalty += clamp(features.topBundlerTraderPercentage / 0.42, 0, 2) * 6;
   }
   if (features.topEntrapmentTraderPercentage !== null) {
     riskPenalty += clamp(features.topEntrapmentTraderPercentage / 0.12, 0, 2) * 8;
@@ -486,7 +499,7 @@ export function scoreScreenFeatures(
     features.topBuyersHolderCount > 0
   ) {
     riskPenalty +=
-      clamp(features.topBuyersSoldCount / features.topBuyersHolderCount, 0, 1) * 6;
+      clamp(features.topBuyersSoldCount / features.topBuyersHolderCount, 0, 1) * 8;
   }
   if (
     features.topBuyersSoldPartCount !== null &&
@@ -494,7 +507,7 @@ export function scoreScreenFeatures(
     features.topBuyersHolderCount > 0
   ) {
     riskPenalty +=
-      clamp(features.topBuyersSoldPartCount / features.topBuyersHolderCount, 0, 1) * 4;
+      clamp(features.topBuyersSoldPartCount / features.topBuyersHolderCount, 0, 1) * 5;
   }
   if (
     features.topBuyersHoldingRate !== null &&
