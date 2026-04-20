@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "defaults": {
+    "enabled": true,
+    "priority": 100
+  },
+  "wallets": [
+    {
+      "label": "Example Wallet",
+      "address": "YourWalletAddressHere"
+    }
+  ]
+}

@@ -34,6 +34,7 @@ npm install
 - Optional: `TELEGRAM_TRENDING_THREAD_ID` (Telegram forum topic id for GMGN trending alerts)
 - Optional: `TELEGRAM_LP_WALLET_THREAD_ID` (Telegram forum topic id for LP wallet tracker alerts)
 - Optional: `TELEGRAM_NEW_DLMM_POOL_THREAD_ID` (Telegram forum topic id for new DLMM pool alerts)
+- Optional: `TELEGRAM_WALLET_ACTIVITY_THREAD_ID` (Telegram forum topic id for temporary raw wallet-activity alerts, default `4184`)
 - Optional: `ENABLE_NEW_DLMM_POOL_TRACKER` (monitor new Meteora DLMM pools from `initialize_lb_pair2`)
 - Optional: `NEW_DLMM_POOL_MIN_VOLUME` (minimum 5m volume needed before a new DLMM pool alert is sent)
 - Optional: `NEW_DLMM_POOL_TIER1_INTERVAL_MS` (poll interval for Tier 1 preset addresses)
@@ -49,6 +50,7 @@ npm install
 - Optional: `METEORA_POOL_META_CACHE_TTL_MS` (default `3600000`, cache TTL for pool pair/bin metadata)
 - Optional: `LP_TRACKED_WALLETS_FILE` (default `./tracked-lp-wallets.json`)
 - Optional legacy fallback: `LP_TRACKED_WALLETS` (comma-separated `label:wallet` entries for DLMM wallet-open alerts)
+- Optional temporary raw wallet-activity tracker: `ENABLE_WALLET_ACTIVITY_TRACKER`, `WALLET_ACTIVITY_TRACKER_INTERVAL_MS`, `WALLET_ACTIVITY_TRACKED_WALLETS_FILE` (default `./tracked-wallet-activity-wallets.json`), or legacy fallback `WALLET_ACTIVITY_TRACKED_WALLETS`
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
 - Optional: `MAX_SOL_PER_10K_MC` (default `1`)
@@ -75,10 +77,12 @@ npm run dev
 - Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
 - Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
 - Optional LP wallet tracker: poll labeled Solana wallets and alert when a tracked wallet opens a new Meteora DLMM position.
+- Optional temporary wallet activity tracker: poll labeled Solana wallets and alert every newly seen transaction signature for those wallets.
 - Preferred wallet input is a JSON file like `tracked-lp-wallets.json` (see `tracked-lp-wallets.example.json`); `.env` wallet list is kept as a legacy fallback.
+- Temporary wallet activity tracker also supports a JSON file like `tracked-wallet-activity-wallets.json` (see `tracked-wallet-activity-wallets.example.json`).
 - The JSON file supports both a simple array format and a richer schema with `version`, `defaults`, and `wallets` entries (plus optional `group`, `priority`, and `notes` per wallet).
 - LP wallet tracker alert format now aims to show compact pool context like `Pool: TOKEN / SOL (100/2%)` and a range like `83.3609 ~ 83.9297 (0.68%)` when enrichment data is available.
-- If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration, trending, LP wallet tracker, and new DLMM pool alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID`, `TELEGRAM_TRENDING_THREAD_ID`, `TELEGRAM_LP_WALLET_THREAD_ID`, and `TELEGRAM_NEW_DLMM_POOL_THREAD_ID`.
+- If you run the bot inside a Telegram supergroup with forum topics enabled, you can route migration, trending, LP wallet tracker, new DLMM pool alerts, and temporary wallet activity alerts to different topics by setting `TELEGRAM_MIGRATION_THREAD_ID`, `TELEGRAM_TRENDING_THREAD_ID`, `TELEGRAM_LP_WALLET_THREAD_ID`, `TELEGRAM_NEW_DLMM_POOL_THREAD_ID`, and `TELEGRAM_WALLET_ACTIVITY_THREAD_ID`.
 - Migration alerts also surface source context (for example Pump.fun, BONK.fun, or Meteora Curve) using GMGN launchpad metadata when available.
 - Phase 3 adds a separate GMGN trending poller path; it is intentionally isolated from the migration scanner so the two engines do not get mixed together.
 - If `WATCH_PROGRAM_IDS` is set, only transactions with matching program/account hints are processed.

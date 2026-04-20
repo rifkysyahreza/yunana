@@ -212,8 +212,36 @@ type MeteoraPool = {
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
-type AlertKind = "migration" | "gmgn_trending" | "lp_wallet_tracker" | "new_dlmm_pool";
+type AlertKind = "migration" | "gmgn_trending" | "lp_wallet_tracker" | "new_dlmm_pool" | "wallet_activity";
 type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
+
+type TrackedWalletActivity = {
+  address: string;
+  label: string;
+  enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
+};
+
+type TrackedWalletActivityRow = {
+  address?: string;
+  label?: string;
+  enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
+};
+
+type TrackedWalletActivityFileSchema = {
+  version?: number;
+  defaults?: {
+    enabled?: boolean;
+    group?: string;
+    priority?: number;
+  };
+  wallets?: TrackedWalletActivityRow[];
+};
 
 type TrackedLpWallet = {
   address: string;
@@ -373,6 +401,8 @@ const TELEGRAM_LP_WALLET_THREAD_ID = parseOptionalNumber(
 const TELEGRAM_NEW_DLMM_POOL_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_NEW_DLMM_POOL_THREAD_ID,
 );
+const TELEGRAM_WALLET_ACTIVITY_THREAD_ID =
+  parseOptionalNumber(process.env.TELEGRAM_WALLET_ACTIVITY_THREAD_ID) ?? 4184;
 const BOT_STARTED_AT = Date.now();
 const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX = "493b2478ed536cc6";
 const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX_ALT = "dfab05ba75a6ad57";
@@ -419,10 +449,15 @@ const GMGN_TRENDING_INTERVAL_MS = Number(
 );
 const ENABLE_LP_WALLET_TRACKER =
   (process.env.ENABLE_LP_WALLET_TRACKER ?? "false").toLowerCase() === "true";
+const ENABLE_WALLET_ACTIVITY_TRACKER =
+  (process.env.ENABLE_WALLET_ACTIVITY_TRACKER ?? "false").toLowerCase() === "true";
 const ENABLE_NEW_DLMM_POOL_TRACKER =
   (process.env.ENABLE_NEW_DLMM_POOL_TRACKER ?? "false").toLowerCase() === "true";
 const LP_WALLET_TRACKER_INTERVAL_MS = Number(
   process.env.LP_WALLET_TRACKER_INTERVAL_MS ?? "60000",
+);
+const WALLET_ACTIVITY_TRACKER_INTERVAL_MS = Number(
+  process.env.WALLET_ACTIVITY_TRACKER_INTERVAL_MS ?? "30000",
 );
 const NEW_DLMM_POOL_MIN_VOLUME = Number(
   process.env.NEW_DLMM_POOL_MIN_VOLUME ?? "5000",
@@ -448,7 +483,10 @@ const METEORA_POOL_META_CACHE_TTL_MS = Number(
 );
 const LP_TRACKED_WALLETS_FILE =
   process.env.LP_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-lp-wallets.json");
+const WALLET_ACTIVITY_TRACKED_WALLETS_FILE =
+  process.env.WALLET_ACTIVITY_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-wallet-activity-wallets.json");
 const LP_TRACKED_WALLETS = loadTrackedLpWallets();
+const WALLET_ACTIVITY_TRACKED_WALLETS = loadTrackedWalletActivityWallets();
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
 const OUTCOME_HORIZONS_MINUTES = splitCsv(
@@ -514,6 +552,7 @@ const loggedPreCandidateDrops = new Set<string>();
 const loggedSecurityNotReadyMints = new Set<string>();
 const seenTrendingMints = new Map<string, number>();
 const trackedLpWalletPositionKeysByWallet = new Map<string, Set<string>>();
+const trackedWalletActivitySignaturesByWallet = new Map<string, Set<string>>();
 const meteoraPoolMetaCache = new Map<
   string,
   { value: MeteoraPool | null; expiresAt: number }
@@ -543,6 +582,9 @@ async function main(): Promise<void> {
     `[boot] lp wallet tracker enabled=${ENABLE_LP_WALLET_TRACKER} interval=${LP_WALLET_TRACKER_INTERVAL_MS}ms wallets=${LP_TRACKED_WALLETS.length}`,
   );
   console.log(
+    `[boot] wallet activity tracker enabled=${ENABLE_WALLET_ACTIVITY_TRACKER} interval=${WALLET_ACTIVITY_TRACKER_INTERVAL_MS}ms wallets=${WALLET_ACTIVITY_TRACKED_WALLETS.length} thread=${TELEGRAM_WALLET_ACTIVITY_THREAD_ID}`,
+  );
+  console.log(
     `[boot] new dlmm pool tracker enabled=${ENABLE_NEW_DLMM_POOL_TRACKER} min_volume=${NEW_DLMM_POOL_MIN_VOLUME} tier1=${NEW_DLMM_POOL_TIER1_INTERVAL_MS}ms tier2=${NEW_DLMM_POOL_TIER2_INTERVAL_MS}ms`,
   );
   console.log(
@@ -560,6 +602,7 @@ async function main(): Promise<void> {
 
   await bootstrapCursors();
   await bootstrapTrackedLpWalletPositions();
+  await bootstrapTrackedWalletActivity();
   await bootstrapDlmmPresetMonitor();
   void startTelegramPingListener();
   setInterval(scanTick, SCAN_INTERVAL_MS);
@@ -643,6 +686,73 @@ async function bootstrapTrackedLpWalletPositions(): Promise<void> {
   }
 }
 
+function getOrderedTrackedWalletActivityWallets(): TrackedWalletActivity[] {
+  return [...WALLET_ACTIVITY_TRACKED_WALLETS].sort((a, b) => {
+    const aPriority = a.priority ?? 100;
+    const bPriority = b.priority ?? 100;
+    if (aPriority !== bPriority) {
+      return aPriority - bPriority;
+    }
+    return a.label.localeCompare(b.label);
+  });
+}
+
+async function bootstrapTrackedWalletActivity(): Promise<void> {
+  if (!ENABLE_WALLET_ACTIVITY_TRACKER || WALLET_ACTIVITY_TRACKED_WALLETS.length === 0) {
+    return;
+  }
+
+  for (const wallet of getOrderedTrackedWalletActivityWallets()) {
+    try {
+      const sigs = await getSignaturesForAddress(wallet.address, 25);
+      trackedWalletActivitySignaturesByWallet.set(
+        wallet.address,
+        new Set(sigs.map((sig) => sig.signature)),
+      );
+      console.log(
+        `[bootstrap] wallet activity ${wallet.label} (${wallet.address}) signatures=${sigs.length}`,
+      );
+    } catch (err) {
+      console.error(
+        `[bootstrap] wallet activity tracker failed for ${wallet.label} (${wallet.address})`,
+        err,
+      );
+    }
+  }
+}
+
+async function processWalletActivityTrackerTick(): Promise<void> {
+  for (const wallet of getOrderedTrackedWalletActivityWallets()) {
+    try {
+      const knownSignatures =
+        trackedWalletActivitySignaturesByWallet.get(wallet.address) ?? new Set<string>();
+      const sigs = await getSignaturesForAddress(wallet.address, 25);
+      const fresh = sigs.filter((sig) => !sig.err && !knownSignatures.has(sig.signature));
+      if (fresh.length === 0) {
+        continue;
+      }
+
+      fresh.reverse();
+      for (const sig of fresh) {
+        await sendWalletActivityTelegramAlert(wallet, sig);
+      }
+
+      trackedWalletActivitySignaturesByWallet.set(
+        wallet.address,
+        new Set(sigs.map((sig) => sig.signature)),
+      );
+      console.log(
+        `[wallet-activity] alerted wallet=${wallet.label} count=${fresh.length}`,
+      );
+    } catch (err) {
+      console.error(
+        `[wallet-activity] tracker error for ${wallet.label} (${wallet.address})`,
+        err,
+      );
+    }
+  }
+}
+
 async function scanTick(): Promise<void> {
   if (isScanTickRunning) {
     return;
@@ -698,6 +808,18 @@ async function scanTick(): Promise<void> {
         0
     ) {
       await processLpWalletTrackerTick();
+    }
+    if (
+      ENABLE_WALLET_ACTIVITY_TRACKER &&
+      WALLET_ACTIVITY_TRACKED_WALLETS.length > 0 &&
+      tickCounter %
+        Math.max(
+          1,
+          Math.round(WALLET_ACTIVITY_TRACKER_INTERVAL_MS / SCAN_INTERVAL_MS),
+        ) ===
+        0
+    ) {
+      await processWalletActivityTrackerTick();
     }
     tickCounter += 1;
     maybePrintPipelineSummary();
@@ -2483,6 +2605,43 @@ async function sendLpWalletTrackerAlert(
   }
 }
 
+async function sendWalletActivityTelegramAlert(
+  wallet: TrackedWalletActivity,
+  sig: SignatureInfo,
+): Promise<void> {
+  const solscanTxLink = `https://solscan.io/tx/${sig.signature}`;
+  const solscanWalletLink = `https://solscan.io/account/${wallet.address}`;
+  const gmgnWalletLink = `https://gmgn.ai/sol/address/${wallet.address}`;
+  const text = [
+    `<b>Wallet Activity</b>`,
+    `Wallet: <b>${escapeHtml(wallet.label)}</b> (<code>${escapeHtml(shortenAddress(wallet.address))}</code>)`,
+    `Signature: <code>${escapeHtml(sig.signature)}</code>`,
+    ...(sig.blockTime ? [`Time: ${escapeHtml(new Date(sig.blockTime * 1000).toISOString())}`] : []),
+    "",
+    `<u>Quick Action</u>`,
+    `<a href="${solscanTxLink}">TX</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${gmgnWalletLink}">GMG</a>`,
+  ].join("\n");
+
+  const payloadBase = buildTelegramPayloadBase("wallet_activity");
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payloadBase,
+        text,
+        disable_web_page_preview: true,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`telegram wallet activity send failed: ${res.status} ${body}`);
+  }
+}
+
 async function sendTelegramAlert(
   alertKind: AlertKind,
   token: GmgnToken | null,
@@ -2859,7 +3018,9 @@ function buildTelegramPayloadBase(alertKind: AlertKind): {
         ? TELEGRAM_LP_WALLET_THREAD_ID
         : alertKind === "new_dlmm_pool"
           ? TELEGRAM_NEW_DLMM_POOL_THREAD_ID
-          : TELEGRAM_MIGRATION_THREAD_ID;
+          : alertKind === "wallet_activity"
+            ? TELEGRAM_WALLET_ACTIVITY_THREAD_ID
+            : TELEGRAM_MIGRATION_THREAD_ID;
 
   return {
     chat_id: TELEGRAM_CHAT_ID,
@@ -2892,7 +3053,9 @@ function splitCsv(input: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
+function parseTrackedWalletActivityWallets(
+  input: string | undefined,
+): TrackedWalletActivity[] {
   return splitCsv(input).flatMap((entry) => {
     const idx = entry.indexOf(":");
     if (idx === -1) {
@@ -2907,6 +3070,35 @@ function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
     return [{
       address,
       label: label || shortenAddress(address),
+    }];
+  });
+}
+
+function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
+  return parseTrackedWalletActivityWallets(input);
+}
+
+function parseTrackedWalletActivityFileRows(
+  rows: unknown,
+  defaults?: TrackedWalletActivityFileSchema["defaults"],
+): TrackedWalletActivity[] {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  return rows.flatMap((row) => {
+    const item = row as TrackedWalletActivityRow;
+    const address = item.address?.trim();
+    const enabled = item.enabled ?? defaults?.enabled ?? true;
+    if (!address || enabled === false) {
+      return [];
+    }
+    return [{
+      address,
+      label: item.label?.trim() || shortenAddress(address),
+      enabled,
+      group: item.group?.trim() || defaults?.group,
+      priority: item.priority ?? defaults?.priority,
+      notes: item.notes?.trim(),
     }];
   });
 }
@@ -2936,6 +3128,19 @@ function parseTrackedLpWalletFileRows(
   });
 }
 
+function parseTrackedWalletActivityFile(input: unknown): TrackedWalletActivity[] {
+  if (Array.isArray(input)) {
+    return parseTrackedWalletActivityFileRows(input);
+  }
+
+  const schema = input as TrackedWalletActivityFileSchema;
+  if (schema && Array.isArray(schema.wallets)) {
+    return parseTrackedWalletActivityFileRows(schema.wallets, schema.defaults);
+  }
+
+  return [];
+}
+
 function parseTrackedLpWalletFile(input: unknown): TrackedLpWallet[] {
   if (Array.isArray(input)) {
     return parseTrackedLpWalletFileRows(input);
@@ -2947,6 +3152,30 @@ function parseTrackedLpWalletFile(input: unknown): TrackedLpWallet[] {
   }
 
   return [];
+}
+
+function loadTrackedWalletActivityWallets(): TrackedWalletActivity[] {
+  try {
+    if (fs.existsSync(WALLET_ACTIVITY_TRACKED_WALLETS_FILE)) {
+      const raw = fs.readFileSync(WALLET_ACTIVITY_TRACKED_WALLETS_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      const wallets = parseTrackedWalletActivityFile(parsed);
+      if (wallets.length > 0) {
+        return wallets;
+      }
+      console.warn(
+        `[wallet-activity] tracked wallet file exists but yielded no enabled wallets: ${WALLET_ACTIVITY_TRACKED_WALLETS_FILE}`,
+      );
+      return [];
+    }
+  } catch (err) {
+    console.error(
+      `[wallet-activity] failed to load wallet file ${WALLET_ACTIVITY_TRACKED_WALLETS_FILE}`,
+      err,
+    );
+  }
+
+  return parseTrackedWalletActivityWallets(process.env.WALLET_ACTIVITY_TRACKED_WALLETS);
 }
 
 function loadTrackedLpWallets(): TrackedLpWallet[] {
