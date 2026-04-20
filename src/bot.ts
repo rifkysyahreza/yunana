@@ -2527,8 +2527,18 @@ async function sendNewDlmmPoolTelegramAlert(
   const gmgnLink = `https://gmgn.ai/sol/token/${pool.nonSolMint}`;
   const dlmmLink = `https://app.meteora.ag/dlmm/${pool.poolAddress}`;
   const solscanTxLink = `https://solscan.io/tx/${signature}`;
-  const tokenSymbol = gmgn?.symbol ?? shortenAddress(pool.nonSolMint);
-  const pairLabel = `${tokenSymbol} / SOL`;
+  const poolMeta = await fetchMeteoraPoolMeta(pool.poolAddress);
+  const tokenXSymbol =
+    poolMeta?.mint_x_symbol ??
+    poolMeta?.token_x?.symbol ??
+    (pool.tokenXMint === pool.nonSolMint ? gmgn?.symbol : null) ??
+    (pool.tokenXMint === SOL_MINT ? "SOL" : shortenAddress(pool.tokenXMint));
+  const tokenYSymbol =
+    poolMeta?.mint_y_symbol ??
+    poolMeta?.token_y?.symbol ??
+    (pool.tokenYMint === pool.nonSolMint ? gmgn?.symbol : null) ??
+    (pool.tokenYMint === SOL_MINT ? "SOL" : shortenAddress(pool.tokenYMint));
+  const pairLabel = `${tokenXSymbol} / ${tokenYSymbol}`;
   const text = [
     `<b>New DLMM Pool</b>`,
     `Pool: ${escapeHtml(pairLabel)}${pool.presetLabel ? ` (${escapeHtml(pool.presetLabel)})` : ""}`,
