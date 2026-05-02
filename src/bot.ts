@@ -2815,7 +2815,7 @@ async function sendTelegramAlert(
   const redFlags = score.redFlags.slice(0, 3).join(" | ") || "n/a";
   const topHolderPatternText = topHolderFunding
     ? [
-        `Repeat bal: ${topHolderFunding.repeatedBalanceRate === null ? "Unknown" : `${(topHolderFunding.repeatedBalanceRate * 100).toFixed(0)}%`}${topHolderFunding.repeatedBalanceValue !== null ? ` @ ${fmtNum(topHolderFunding.repeatedBalanceValue)}` : ""}`,
+        `Repeat SOL: ${topHolderFunding.repeatedBalanceRate === null ? "Unknown" : `${(topHolderFunding.repeatedBalanceRate * 100).toFixed(0)}%`}${topHolderFunding.repeatedBalanceValue !== null ? ` @ ${fmtNum(topHolderFunding.repeatedBalanceValue)}` : ""}`,
         `Repeat supply: ${topHolderFunding.repeatedSupplyRate === null ? "Unknown" : `${(topHolderFunding.repeatedSupplyRate * 100).toFixed(0)}%`}${topHolderFunding.repeatedSupplyValue !== null ? ` @ ${(topHolderFunding.repeatedSupplyValue * 100).toFixed(2)}%` : ""}`,
         `Fresh tags: ${topHolderFunding.freshWalletTagCount} | Bundlers: ${topHolderFunding.bundlerTagCount}`,
       ].join(" | ")
@@ -2847,7 +2847,7 @@ async function sendTelegramAlert(
     `2C Avg Vol: ${fmtNum(twoCandleAvgVolume)} | B/S 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
     `Top10: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`} | Top buyers sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
     `Smart: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)} | Rat: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)} | Fast snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
-    `Holder funder age: ${features.topHolderFundingSourceAvgAgeHours === null ? "Unknown" : `${features.topHolderFundingSourceAvgAgeHours.toFixed(1)}h`} | Equal bal: ${features.topHolderRepeatedBalanceRate === null ? "Unknown" : `${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`} | Uniform cv: ${features.topHolderSupplyUniformityCv === null ? "Unknown" : features.topHolderSupplyUniformityCv.toFixed(3)}`,
+    `Holder funder age: ${features.topHolderFundingSourceAvgAgeHours === null ? "Unknown" : `${features.topHolderFundingSourceAvgAgeHours.toFixed(1)}h`} | Equal SOL: ${features.topHolderRepeatedBalanceRate === null ? "Unknown" : `${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`} | Uniform cv: ${features.topHolderSupplyUniformityCv === null ? "Unknown" : features.topHolderSupplyUniformityCv.toFixed(3)}`,
     `Top holder patterns: ${topHolderPatternText}`,
     ...(topHolderRows.length > 0
       ? ["", `<u>Top Holder Stats</u>`, ...topHolderRows]
@@ -3094,9 +3094,9 @@ async function analyzeTopHolderFunding(
         fundingTimestamp !== null ? Math.max(0, (nowSec - fundingTimestamp) / 3600) : null;
       const fundingAmountSol = toNumber(row.native_transfer?.amount);
 
-      if (balance !== null) {
-        balances.push(balance);
-        balanceKeys.push(balance.toFixed(6));
+      if (currentSolBalance !== null) {
+        balances.push(currentSolBalance);
+        balanceKeys.push(currentSolBalance.toFixed(6));
       }
       if (supplyRate !== null) {
         supplyShares.push(supplyRate);

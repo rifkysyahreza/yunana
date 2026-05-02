@@ -618,7 +618,7 @@ export function scoreScreenFeatures(
       config.minRepeatedTopHolderBalanceRate
   ) {
     scalpRiskFlags.push(
-      `top-holder balances too similar ${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`,
+      `top-holder SOL balances too similar ${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`,
     );
   }
   if (
@@ -718,7 +718,7 @@ export function scoreScreenFeatures(
     features.topHolderRepeatedBalanceRate >=
       config.minRepeatedTopHolderBalanceRate
   ) {
-    redFlags.push("top-holder balances too similar");
+    redFlags.push("top-holder SOL balances too similar");
   }
   if (
     features.topHolderRepeatedSupplyRate !== null &&
