@@ -36,39 +36,30 @@ type SignatureInfo = {
   blockTime?: number;
 };
 
-type TokenLargestAccount = {
+type GmgnTopHolderStatRow = {
   address?: string;
-  amount?: string;
-  uiAmount?: number;
-  uiAmountString?: string;
-  decimals?: number;
-};
-
-type ParsedAccountInfoResponse = {
-  value?: {
-    data?: {
-      parsed?: {
-        info?: {
-          owner?: string;
-          tokenAmount?: {
-            uiAmount?: number;
-            uiAmountString?: string;
-            amount?: string;
-            decimals?: number;
-          };
-        };
-      };
-    };
+  account_address?: string;
+  wallet_tag_v2?: string;
+  balance?: string | number;
+  amount_percentage?: string | number;
+  native_balance?: string | number;
+  tags?: string[];
+  maker_token_tags?: string[];
+  exchange?: string;
+  is_new?: boolean;
+  is_suspicious?: boolean;
+  created_at?: number;
+  native_transfer?: {
+    name?: string | null;
+    from_address?: string | null;
+    amount?: string | number | null;
+    timestamp?: number;
+    tx_hash?: string | null;
   } | null;
 };
 
-type TokenSupplyResponse = {
-  value?: {
-    amount?: string;
-    uiAmount?: number;
-    uiAmountString?: string;
-    decimals?: number;
-  };
+type GmgnTopHolderStatsResponse = {
+  list?: GmgnTopHolderStatRow[];
 };
 
 type ParsedTransaction = {
@@ -246,6 +237,25 @@ type MeteoraPool = {
   token_y?: { address?: string; symbol?: string };
 };
 
+type TopHolderFundingDetail = {
+  rank: string;
+  walletAddress: string;
+  walletTag: string | null;
+  balance: number | null;
+  supplyRate: number | null;
+  currentSolBalance: number | null;
+  tags: string[];
+  exchange: string | null;
+  isNew: boolean;
+  isSuspicious: boolean;
+  walletAgeHours: number | null;
+  fundingSourceName: string | null;
+  fundingSourceAddress: string | null;
+  fundingAmountSol: number | null;
+  fundingAgeHours: number | null;
+  fundingTimestamp: number | null;
+};
+
 type TopHolderFundingAnalysis = {
   holderCountAnalyzed: number;
   fundingSourceKnownCount: number;
@@ -254,6 +264,11 @@ type TopHolderFundingAnalysis = {
   repeatedBalanceRate: number | null;
   repeatedSupplyRate: number | null;
   supplyUniformityCv: number | null;
+  freshWalletTagCount: number;
+  bundlerTagCount: number;
+  repeatedBalanceValue: number | null;
+  repeatedSupplyValue: number | null;
+  holders: TopHolderFundingDetail[];
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
@@ -546,10 +561,6 @@ const TOP_HOLDER_ANALYSIS_COUNT = Math.max(
   3,
   Number(process.env.TOP_HOLDER_ANALYSIS_COUNT ?? "9"),
 );
-const TOP_HOLDER_FUNDING_LOOKBACK_SIGNATURES = Math.max(
-  5,
-  Number(process.env.TOP_HOLDER_FUNDING_LOOKBACK_SIGNATURES ?? "12"),
-);
 const TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS = Number(
   process.env.TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS ?? "24",
 );
@@ -590,6 +601,7 @@ const GMGN_TOKEN_MCAP_CANDLES_URL =
 const GMGN_QUOTE_API_URL =
   "https://gmgn.ai/defi/quotation/v1/smartmoney/sol/walletstat";
 const GMGN_TRENDING_URL = "https://gmgn.ai/api/v1/rank/sol/swaps/1m";
+const GMGN_TOP_HOLDER_STATS_URL = "https://gmgn.ai/vas/api/v1/token_holders/sol";
 const GMGN_QUOTE_WALLET =
   process.env.GMGN_QUOTE_WALLET ??
   "HVHAvzNxQUhvTWr5uoNNNfrQYfzcsReUFM4HnZwfeHkQ";
@@ -1679,6 +1691,7 @@ async function processMintCandidate(
       score,
       launchSource,
       launchpadInfo,
+      topHolderFunding,
     );
     deferredVolumeCandidates.delete(mint);
     if (deferredVolumeMints.has(mint)) {
@@ -2756,6 +2769,7 @@ async function sendTelegramAlert(
   score: ScreenScore,
   launchSource: LaunchSource = "unknown",
   launchpadInfo: GmgnMultiToken | null = null,
+  topHolderFunding: TopHolderFundingAnalysis | null = null,
 ): Promise<void> {
   const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
   const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
@@ -2799,6 +2813,21 @@ async function sendTelegramAlert(
   const compactReasons = score.reasons.slice(0, 4).join(" | ") || "n/a";
   const greenFlags = score.greenFlags.slice(0, 3).join(" | ") || "n/a";
   const redFlags = score.redFlags.slice(0, 3).join(" | ") || "n/a";
+  const topHolderPatternText = topHolderFunding
+    ? [
+        `Repeat bal: ${topHolderFunding.repeatedBalanceRate === null ? "Unknown" : `${(topHolderFunding.repeatedBalanceRate * 100).toFixed(0)}%`}${topHolderFunding.repeatedBalanceValue !== null ? ` @ ${fmtNum(topHolderFunding.repeatedBalanceValue)}` : ""}`,
+        `Repeat supply: ${topHolderFunding.repeatedSupplyRate === null ? "Unknown" : `${(topHolderFunding.repeatedSupplyRate * 100).toFixed(0)}%`}${topHolderFunding.repeatedSupplyValue !== null ? ` @ ${(topHolderFunding.repeatedSupplyValue * 100).toFixed(2)}%` : ""}`,
+        `Fresh tags: ${topHolderFunding.freshWalletTagCount} | Bundlers: ${topHolderFunding.bundlerTagCount}`,
+      ].join(" | ")
+    : "Unknown";
+  const topHolderRows =
+    topHolderFunding?.holders.slice(0, 4).map((holder) => {
+      const tags = holder.tags.length > 0 ? holder.tags.join(",") : "-";
+      const fundingSource = holder.fundingSourceAddress
+        ? `${holder.fundingSourceName ?? shortenAddress(holder.fundingSourceAddress)} <code>${escapeHtml(shortenAddress(holder.fundingSourceAddress))}</code>`
+        : "Unknown";
+      return `${escapeHtml(holder.rank)} ${escapeHtml(shortenAddress(holder.walletAddress))} | tags ${escapeHtml(tags)} | SOL ${holder.currentSolBalance === null ? "?" : fmtNum(holder.currentSolBalance)} | wallet age ${holder.walletAgeHours === null ? "?" : `${holder.walletAgeHours.toFixed(1)}h`} | fund ${fundingSource} | amt ${holder.fundingAmountSol === null ? "?" : fmtNum(holder.fundingAmountSol)} | fund age ${holder.fundingAgeHours === null ? "?" : `${holder.fundingAgeHours.toFixed(1)}h`}${holder.isSuspicious ? " | suspicious" : ""}`;
+    }) ?? [];
 
   const text = [
     `<b>${escapeHtml(title)}</b>`,
@@ -2819,6 +2848,10 @@ async function sendTelegramAlert(
     `Top10: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`} | Top buyers sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
     `Smart: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)} | Rat: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)} | Fast snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
     `Holder funder age: ${features.topHolderFundingSourceAvgAgeHours === null ? "Unknown" : `${features.topHolderFundingSourceAvgAgeHours.toFixed(1)}h`} | Equal bal: ${features.topHolderRepeatedBalanceRate === null ? "Unknown" : `${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`} | Uniform cv: ${features.topHolderSupplyUniformityCv === null ? "Unknown" : features.topHolderSupplyUniformityCv.toFixed(3)}`,
+    `Top holder patterns: ${topHolderPatternText}`,
+    ...(topHolderRows.length > 0
+      ? ["", `<u>Top Holder Stats</u>`, ...topHolderRows]
+      : []),
     "",
     `<u>Pools</u>`,
     `DLMM: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
@@ -3022,77 +3055,106 @@ async function analyzeTopHolderFunding(
   mint: string,
 ): Promise<TopHolderFundingAnalysis | null> {
   try {
-    const [largestAccounts, supply] = await Promise.all([
-      getTokenLargestAccounts(mint),
-      getTokenSupply(mint),
-    ]);
-    const rankedAccounts = largestAccounts.slice(1, 1 + TOP_HOLDER_ANALYSIS_COUNT);
-    if (rankedAccounts.length === 0) {
+    const rows = await fetchGmgnTopHolderStats(mint);
+    const rankedRows = rows.slice(1, 1 + TOP_HOLDER_ANALYSIS_COUNT);
+    if (rankedRows.length === 0) {
       return null;
     }
 
+    const nowSec = Date.now() / 1000;
+    const holders: TopHolderFundingDetail[] = [];
     const balances: number[] = [];
+    const balanceKeys: string[] = [];
     const supplyShares: number[] = [];
+    const supplyKeys: string[] = [];
     const fundingSourceAges: number[] = [];
     let youngFundingSourceCount = 0;
+    let freshWalletTagCount = 0;
+    let bundlerTagCount = 0;
 
-    for (const account of rankedAccounts) {
-      const tokenAccount = account.address;
-      const balance =
-        toNumber(account.uiAmount) ??
-        toNumber(account.uiAmountString) ??
-        toNumber(account.amount);
-      if (!tokenAccount || balance === null || balance <= 0) {
-        continue;
+    for (const row of rankedRows) {
+      const balance = toNumber(row.balance);
+      const supplyRate = toNumber(row.amount_percentage);
+      const currentSolBalanceLamports = toNumber(row.native_balance);
+      const currentSolBalance =
+        currentSolBalanceLamports !== null ? currentSolBalanceLamports / 1_000_000_000 : null;
+      const tags = [
+        ...(Array.isArray(row.tags) ? row.tags : []),
+        ...(Array.isArray(row.maker_token_tags) ? row.maker_token_tags : []),
+      ].filter((tag, index, arr) => Boolean(tag) && arr.indexOf(tag) === index);
+      const walletAgeHours =
+        typeof row.created_at === "number" && row.created_at > 0
+          ? Math.max(0, (nowSec - row.created_at) / 3600)
+          : null;
+      const fundingTimestamp =
+        typeof row.native_transfer?.timestamp === "number" && row.native_transfer.timestamp > 0
+          ? row.native_transfer.timestamp
+          : null;
+      const fundingAgeHours =
+        fundingTimestamp !== null ? Math.max(0, (nowSec - fundingTimestamp) / 3600) : null;
+      const fundingAmountSol = toNumber(row.native_transfer?.amount);
+
+      if (balance !== null) {
+        balances.push(balance);
+        balanceKeys.push(balance.toFixed(6));
+      }
+      if (supplyRate !== null) {
+        supplyShares.push(supplyRate);
+        supplyKeys.push((supplyRate * 10000).toFixed(0));
+      }
+      if (fundingAgeHours !== null) {
+        fundingSourceAges.push(fundingAgeHours);
+        if (fundingAgeHours <= TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS) {
+          youngFundingSourceCount += 1;
+        }
+      }
+      if (tags.includes("fresh_wallet") || row.is_new === true) {
+        freshWalletTagCount += 1;
+      }
+      if (tags.includes("bundler")) {
+        bundlerTagCount += 1;
       }
 
-      balances.push(balance);
-      if (supply !== null && supply > 0) {
-        supplyShares.push(balance / supply);
-      }
-
-      const owner = await getTokenAccountOwner(tokenAccount);
-      if (!owner) {
-        continue;
-      }
-      const fundingSource = await findRecentInboundFundingSource(owner);
-      if (!fundingSource) {
-        continue;
-      }
-      const fundingAge = await estimateAddressAgeHours(
-        fundingSource,
-        TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS,
-      );
-      if (fundingAge === null) {
-        continue;
-      }
-      fundingSourceAges.push(fundingAge);
-      if (fundingAge <= TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS) {
-        youngFundingSourceCount += 1;
-      }
+      holders.push({
+        rank: row.wallet_tag_v2 ?? `TOP${holders.length + 2}`,
+        walletAddress: row.address ?? "",
+        walletTag: row.wallet_tag_v2 ?? null,
+        balance,
+        supplyRate,
+        currentSolBalance,
+        tags,
+        exchange: row.exchange ?? null,
+        isNew: row.is_new === true,
+        isSuspicious: row.is_suspicious === true,
+        walletAgeHours,
+        fundingSourceName: row.native_transfer?.name ?? null,
+        fundingSourceAddress: row.native_transfer?.from_address ?? null,
+        fundingAmountSol,
+        fundingAgeHours,
+        fundingTimestamp,
+      });
     }
 
-    const repeatedBalanceRate = calculateDominantRepeatRate(
-      balances.map((value) => value.toFixed(6)),
-    );
-    const repeatedSupplyRate = calculateDominantRepeatRate(
-      supplyShares.map((value) => (value * 10000).toFixed(0)),
-    );
-    const supplyUniformityCv = calculateCoefficientOfVariation(supplyShares);
+    const repeatedBalance = calculateDominantRepeatRate(balanceKeys, balances);
+    const repeatedSupply = calculateDominantRepeatRate(supplyKeys, supplyShares);
     const fundingSourceAvgAgeHours =
       fundingSourceAges.length > 0
-        ? fundingSourceAges.reduce((sum, value) => sum + value, 0) /
-          fundingSourceAges.length
+        ? fundingSourceAges.reduce((sum, value) => sum + value, 0) / fundingSourceAges.length
         : null;
 
     return {
-      holderCountAnalyzed: balances.length,
+      holderCountAnalyzed: holders.length,
       fundingSourceKnownCount: fundingSourceAges.length,
       fundingSourceAvgAgeHours,
       youngFundingSourceCount,
-      repeatedBalanceRate,
-      repeatedSupplyRate,
-      supplyUniformityCv,
+      repeatedBalanceRate: repeatedBalance.rate,
+      repeatedSupplyRate: repeatedSupply.rate,
+      supplyUniformityCv: calculateCoefficientOfVariation(supplyShares),
+      freshWalletTagCount,
+      bundlerTagCount,
+      repeatedBalanceValue: repeatedBalance.value,
+      repeatedSupplyValue: repeatedSupply.value,
+      holders,
     };
   } catch (err) {
     console.error(`[holder-funding] analysis failed mint=${mint}`, err);
@@ -3100,125 +3162,59 @@ async function analyzeTopHolderFunding(
   }
 }
 
-async function getTokenLargestAccounts(
+async function fetchGmgnTopHolderStats(
   mint: string,
-): Promise<TokenLargestAccount[]> {
-  const result = await rpcCall<{ value?: TokenLargestAccount[] }>(
-    "getTokenLargestAccounts",
-    [mint, { commitment: "confirmed" }],
-  );
-  return Array.isArray(result?.value) ? result.value : [];
-}
-
-async function getTokenSupply(mint: string): Promise<number | null> {
-  const result = await rpcCall<TokenSupplyResponse>("getTokenSupply", [
-    mint,
-    { commitment: "confirmed" },
-  ]);
-  return (
-    toNumber(result?.value?.uiAmount) ??
-    toNumber(result?.value?.uiAmountString) ??
-    toNumber(result?.value?.amount)
-  );
-}
-
-async function getTokenAccountOwner(tokenAccount: string): Promise<string | null> {
-  const result = await rpcCall<ParsedAccountInfoResponse>("getAccountInfo", [
-    tokenAccount,
-    { encoding: "jsonParsed", commitment: "confirmed" },
-  ]);
-  const owner = result?.value?.data?.parsed?.info?.owner;
-  return typeof owner === "string" && owner.length > 0 ? owner : null;
-}
-
-async function findRecentInboundFundingSource(
-  walletAddress: string,
-): Promise<string | null> {
-  const sigs = await getSignaturesForAddress(
-    walletAddress,
-    TOP_HOLDER_FUNDING_LOOKBACK_SIGNATURES,
-  );
-  for (const sig of sigs) {
-    if (sig.err) {
-      continue;
-    }
-    const tx = await getParsedTransaction(sig.signature);
-    const source = extractInboundFundingSourceFromTx(tx, walletAddress);
-    if (source) {
-      return source;
-    }
-  }
-  return null;
-}
-
-function extractInboundFundingSourceFromTx(
-  tx: ParsedTransaction | null,
-  walletAddress: string,
-): string | null {
-  const instructions = tx?.transaction?.message?.instructions ?? [];
-  for (const ix of instructions) {
-    const info = ix.parsed?.info;
-    if (!info) {
-      continue;
-    }
-    const destination = typeof info.destination === "string" ? info.destination : null;
-    const source = typeof info.source === "string" ? info.source : null;
-    if (destination === walletAddress && source && source !== walletAddress) {
-      return source;
-    }
-  }
-  return null;
-}
-
-async function estimateAddressAgeHours(
-  address: string,
-  thresholdHours: number,
-): Promise<number | null> {
-  const thresholdSeconds = thresholdHours * 3600;
-  const nowSeconds = Date.now() / 1000;
-  let before: string | undefined;
-  let oldestBlockTime: number | null = null;
-
-  for (let page = 0; page < 5; page += 1) {
-    const sigs = await getSignaturesForAddress(address, 100, before);
-    if (sigs.length === 0) {
-      break;
-    }
-
-    const oldestWithTime = [...sigs].reverse().find((sig) => typeof sig.blockTime === "number");
-    if (oldestWithTime?.blockTime) {
-      oldestBlockTime = oldestWithTime.blockTime;
-      if (nowSeconds - oldestBlockTime >= thresholdSeconds) {
-        return (nowSeconds - oldestBlockTime) / 3600;
-      }
-    }
-
-    if (sigs.length < 100) {
-      if (oldestBlockTime !== null) {
-        return (nowSeconds - oldestBlockTime) / 3600;
-      }
-      break;
-    }
-
-    before = sigs[sigs.length - 1]?.signature;
-    if (!before) {
-      break;
-    }
+): Promise<GmgnTopHolderStatRow[]> {
+  const res = await fetch(`${GMGN_TOP_HOLDER_STATS_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`gmgn top holder stats http ${res.status}`);
   }
 
-  return null;
+  const json = (await res.json()) as {
+    code?: number;
+    data?: GmgnTopHolderStatsResponse;
+  };
+  if (json.code !== undefined && json.code !== 0) {
+    throw new Error(`gmgn top holder stats code ${String(json.code)}`);
+  }
+  return Array.isArray(json.data?.list) ? json.data.list : [];
 }
 
-function calculateDominantRepeatRate(values: string[]): number | null {
-  if (values.length === 0) {
-    return null;
+function calculateDominantRepeatRate(
+  keys: string[],
+  rawValues: number[],
+): { rate: number | null; value: number | null } {
+  if (keys.length === 0 || rawValues.length === 0) {
+    return { rate: null, value: null };
   }
-  const counts = new Map<string, number>();
-  for (const value of values) {
-    counts.set(value, (counts.get(value) ?? 0) + 1);
+  const counts = new Map<string, { count: number; firstValue: number }>();
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    const rawValue = rawValues[i];
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      counts.set(key, { count: 1, firstValue: rawValue });
+    }
   }
-  const maxCount = Math.max(...counts.values());
-  return maxCount / values.length;
+  let best: { count: number; firstValue: number } | null = null;
+  for (const entry of counts.values()) {
+    if (!best || entry.count > best.count) {
+      best = entry;
+    }
+  }
+  return {
+    rate: best ? best.count / keys.length : null,
+    value: best?.firstValue ?? null,
+  };
 }
 
 function calculateCoefficientOfVariation(values: number[]): number | null {
