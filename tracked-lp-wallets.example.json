@@ -1,12 +1,26 @@
-[
-  {
-    "label": "active_1",
-    "address": "7fiZ16U15a8JNVkH8B1WU98RYwMyPLP4TQVbCZQnTX26",
-    "enabled": true
+{
+  "version": 1,
+  "defaults": {
+    "enabled": true,
+    "group": "copytrade",
+    "priority": 100
   },
-  {
-    "label": "active_5",
-    "address": "Bq7AxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxB4A4",
-    "enabled": true
-  }
-]
+  "wallets": [
+    {
+      "label": "active_1",
+      "address": "7fiZ16U15a8JNVkH8B1WU98RYwMyPLP4TQVbCZQnTX26",
+      "enabled": true,
+      "group": "copytrade",
+      "priority": 10,
+      "notes": "fast active DLMM wallet"
+    },
+    {
+      "label": "active_5",
+      "address": "Bq7AxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxB4A4",
+      "enabled": true,
+      "group": "copytrade",
+      "priority": 20,
+      "notes": "good range placement"
+    }
+  ]
+}

@@ -2,4 +2,6 @@ node_modules
 dist
 notes
 .env
-runtime-data
+runtime-data/
+tracked-lp-wallets.json
+tracked-wallet-activity-wallets.json

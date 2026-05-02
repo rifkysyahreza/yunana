@@ -1,16 +1,65 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
+import {
+  buildScreenFeatures,
+  scoreScreenFeatures,
+  type CandlePoint,
+  type ScreenFeatures,
+  type ScreenScore,
+  type ScreenerConfig,
+} from "./screener.js";
+import {
+  buildCandidateRow,
+  buildPreCandidateRow,
+  logCandidateRow,
+  logOutcomeRow,
+  logPreCandidateRow,
+  type CandidateDatasetRow,
+} from "./dataset.js";
 
 type JsonRpcResponse<T> = {
   result?: T;
   error?: { code: number; message: string };
 };
 
+type ProgramAccountInfo = {
+  pubkey: string;
+  account: {
+    data?: [string, string] | string;
+  };
+};
+
 type SignatureInfo = {
   signature: string;
   err: unknown;
   blockTime?: number;
+};
+
+type GmgnTopHolderStatRow = {
+  address?: string;
+  account_address?: string;
+  wallet_tag_v2?: string;
+  balance?: string | number;
+  amount_percentage?: string | number;
+  native_balance?: string | number;
+  tags?: string[];
+  maker_token_tags?: string[];
+  exchange?: string;
+  is_new?: boolean;
+  is_suspicious?: boolean;
+  created_at?: number;
+  native_transfer?: {
+    name?: string | null;
+    from_address?: string | null;
+    amount?: string | number | null;
+    timestamp?: number;
+    tx_hash?: string | null;
+  } | null;
+};
+
+type GmgnTopHolderStatsResponse = {
+  list?: GmgnTopHolderStatRow[];
 };
 
 type ParsedTransaction = {
@@ -20,7 +69,8 @@ type ParsedTransaction = {
       instructions?: Array<{
         programId?: string;
         accounts?: string[];
-        parsed?: { type?: string };
+        data?: string;
+        parsed?: { type?: string; info?: Record<string, unknown> };
       }>;
     };
   };
@@ -35,7 +85,11 @@ type GmgnToken = {
   address: string;
   symbol?: string;
   name?: string;
+  volume_1m?: string | number;
+  volume_5m?: string | number;
   banner?: string;
+  holder_count?: string | number;
+  liquidity?: string | number;
   launchpad?: string;
   launchpad_platform?: string;
   exchange?: string;
@@ -44,9 +98,36 @@ type GmgnToken = {
   market_cap?: string | number;
   marketcap?: string | number;
   fdv?: string | number;
+  price?: {
+    price?: string | number;
+    price_1m?: string | number;
+    price_5m?: string | number;
+    price_high_1m?: string | number;
+    price_high_5m?: string | number;
+    price_low_1m?: string | number;
+    price_low_5m?: string | number;
+    buys_1m?: number;
+    sells_1m?: number;
+    buys_5m?: number;
+    sells_5m?: number;
+    volume_1m?: string | number;
+    volume_5m?: string | number;
+    buy_volume_1m?: string | number;
+    sell_volume_1m?: string | number;
+    buy_volume_5m?: string | number;
+    sell_volume_5m?: string | number;
+    swaps_1m?: number;
+    swaps_5m?: number;
+    hot_level?: number;
+  };
+  visiting_count?: string | number;
   pool?: {
     exchange?: string;
     pool_address?: string;
+    fee_ratio?: string | number;
+  };
+  dev?: {
+    top_10_holder_rate?: string | number;
   };
 };
 
@@ -77,11 +158,65 @@ type GmgnTokenSecurity = {
   address: string;
   renounced_mint?: boolean;
   renounced_freeze_account?: boolean;
+  top_10_holder_rate?: string | number;
+  buy_tax?: string | number;
+  sell_tax?: string | number;
+  hide_risk?: boolean;
+};
+
+type GmgnTokenStat = {
+  holder_count?: string | number;
+  bluechip_owner_percentage?: string | number;
+  top_bundler_trader_percentage?: string | number;
+  top_entrapment_trader_percentage?: string | number;
+  bot_degen_rate?: string | number;
+  fresh_wallet_rate?: string | number;
+  top_10_holder_rate?: string | number;
+  dev_team_hold_rate?: string | number;
+  creator_hold_rate?: string | number;
+  creator_token_balance?: string | number;
+  private_vault_hold_rate?: string | number;
+};
+
+type GmgnTagWalletCount = {
+  smart_wallets?: number;
+  fresh_wallets?: number;
+  renowned_wallets?: number; // KOL wallets
+  creator_wallets?: number;
+  sniper_wallets?: number;
+  rat_trader_wallets?: number;
+  whale_wallets?: number;
+  top_wallets?: number;
+  following_wallets?: number;
+  bundler_wallets?: number;
+};
+
+type GmgnTopBuyers = {
+  holders?: {
+    holder_count?: number;
+    statusNow?: {
+      hold?: number;
+      bought_more?: number;
+      sold_part?: number;
+      sold?: number;
+      transfered?: number;
+      bought_rate?: string | number;
+      holding_rate?: string | number;
+    };
+    holderInfo?: Array<{
+      is_fast_sniper?: number;
+    }>;
+  };
 };
 
 type GmgnMcapCandle = {
   time?: number;
+  open?: string | number;
+  high?: string | number;
+  low?: string | number;
+  close?: string | number;
   volume?: string | number;
+  amount?: string | number;
 };
 
 type MeteoraPool = {
@@ -102,19 +237,104 @@ type MeteoraPool = {
   token_y?: { address?: string; symbol?: string };
 };
 
+type TopHolderFundingDetail = {
+  rank: string;
+  walletAddress: string;
+  walletTag: string | null;
+  balance: number | null;
+  supplyRate: number | null;
+  currentSolBalance: number | null;
+  tags: string[];
+  exchange: string | null;
+  isNew: boolean;
+  isSuspicious: boolean;
+  walletAgeHours: number | null;
+  fundingSourceName: string | null;
+  fundingSourceAddress: string | null;
+  fundingAmountSol: number | null;
+  fundingAgeHours: number | null;
+  fundingTimestamp: number | null;
+};
+
+type TopHolderFundingAnalysis = {
+  holderCountAnalyzed: number;
+  fundingSourceKnownCount: number;
+  fundingSourceAvgAgeHours: number | null;
+  youngFundingSourceCount: number;
+  repeatedBalanceRate: number | null;
+  repeatedSupplyRate: number | null;
+  supplyUniformityCv: number | null;
+  freshWalletTagCount: number;
+  bundlerTagCount: number;
+  repeatedBalanceValue: number | null;
+  repeatedSupplyValue: number | null;
+  holders: TopHolderFundingDetail[];
+};
+
 type MeteoraPoolType = "dlmm" | "damm_v2";
-type AlertKind = "migration" | "gmgn_trending" | "lp_wallet_tracker";
+type AlertKind = "migration" | "gmgn_trending" | "lp_wallet_tracker" | "new_dlmm_pool" | "wallet_activity";
 type LaunchSource = "pumpfun" | "letsbonk" | "meteora_curve" | "unknown";
+
+type TrackedWalletActivity = {
+  address: string;
+  label: string;
+  enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
+};
+
+type TrackedWalletActivityRow = {
+  address?: string;
+  label?: string;
+  enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
+};
+
+type TrackedWalletActivityFileSchema = {
+  version?: number;
+  defaults?: {
+    enabled?: boolean;
+    group?: string;
+    priority?: number;
+  };
+  wallets?: TrackedWalletActivityRow[];
+};
 
 type TrackedLpWallet = {
   address: string;
   label: string;
+  enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
 };
 
 type TrackedLpWalletFileRow = {
   address?: string;
   label?: string;
   enabled?: boolean;
+  group?: string;
+  priority?: number;
+  notes?: string;
+};
+
+type TrackedLpWalletFileSchema = {
+  version?: number;
+  defaults?: {
+    enabled?: boolean;
+    group?: string;
+    priority?: number;
+  };
+  wallets?: TrackedLpWalletFileRow[];
+};
+
+type LpWalletTrackerStateFile = {
+  version: number;
+  updatedAt: string;
+  wallets: Record<string, { knownPositions: string[] }>;
 };
 
 type DlmmPositionAccount = {
@@ -195,6 +415,40 @@ type PipelineStage =
 const HELIUS_API_KEY = mustGetEnv("HELIUS_API_KEY");
 const TELEGRAM_BOT_TOKEN = mustGetEnv("TELEGRAM_BOT_TOKEN");
 const TELEGRAM_CHAT_ID = mustGetEnv("TELEGRAM_CHAT_ID");
+const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "";
+const DLMM_PROGRAM_ID = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
+const DLMM_PRESET_TIER_1 = [
+  "96y1FmgUx2oxqKMx4j7RtqzJ8JPvgNQGrD47WgXJNxs6", // 80/1%
+  "CrZUmJzkSs4TWg8GpCq5UGRX4ryRYHYYVQQ4dNMYo1GW", // 100/1%
+  "8ntXSqN6fm6TtWq46yKxXXz5T85jRsj2WxnwLs4JMk64", // 100/2%
+  "2yaMAhHyTqrxxf5rfJb6UCidX6ziU215iA3N4U3KiE1T", // 100/3%
+  "39eqLC7ZRSUMnW7a7BBNY6SmVCMkhydbd4w9vrqnTQPz", // 125/5%
+  "CtaYFvWNW443XaZSRTbbC61U8xXyEYnxud1LzwwdTdSP", // 125/10%
+  "45XUmSQSDVeX9JE9E47LY3J813Nu3Eccne45Pe3dihAq", // 200/2%
+];
+const DLMM_PRESET_TIER_2 = [
+  "9L9JeZqkoEUiYaXoxZ7sCurcpMEZzz1VpReUfcooKzQa", // 100/5%
+  "7pz5PW7scE1kZ1FPMDrfpRomD1nUfs3g14nk9Vbjyypq", // 400/5%
+  "7d2HWe816DxGGtcB4PaYPDBmo1Tt6PyoeQQVWEhXn3fS", // 80/2%
+  "E8MqMkb21uyfg7raP7XtZawAvxNLR4bDB22orwQEUYi1", // 200/5%
+  "CrXRfsV5PJFZrKGrZPjz5GifN1UNRYq6LXTsmSxdNMHP", // 200/10%
+  "4vP4DFDJLRz85NBCfJALYPNdieWwzQSstrUuTms1gekn", // 250/2%
+];
+const DLMM_PRESET_LABELS = new Map<string, string>([
+  ["96y1FmgUx2oxqKMx4j7RtqzJ8JPvgNQGrD47WgXJNxs6", "80/1%"],
+  ["CrZUmJzkSs4TWg8GpCq5UGRX4ryRYHYYVQQ4dNMYo1GW", "100/1%"],
+  ["8ntXSqN6fm6TtWq46yKxXXz5T85jRsj2WxnwLs4JMk64", "100/2%"],
+  ["2yaMAhHyTqrxxf5rfJb6UCidX6ziU215iA3N4U3KiE1T", "100/3%"],
+  ["39eqLC7ZRSUMnW7a7BBNY6SmVCMkhydbd4w9vrqnTQPz", "125/5%"],
+  ["CtaYFvWNW443XaZSRTbbC61U8xXyEYnxud1LzwwdTdSP", "125/10%"],
+  ["45XUmSQSDVeX9JE9E47LY3J813Nu3Eccne45Pe3dihAq", "200/2%"],
+  ["9L9JeZqkoEUiYaXoxZ7sCurcpMEZzz1VpReUfcooKzQa", "100/5%"],
+  ["7pz5PW7scE1kZ1FPMDrfpRomD1nUfs3g14nk9Vbjyypq", "400/5%"],
+  ["7d2HWe816DxGGtcB4PaYPDBmo1Tt6PyoeQQVWEhXn3fS", "80/2%"],
+  ["E8MqMkb21uyfg7raP7XtZawAvxNLR4bDB22orwQEUYi1", "200/5%"],
+  ["CrXRfsV5PJFZrKGrZPjz5GifN1UNRYq6LXTsmSxdNMHP", "200/10%"],
+  ["4vP4DFDJLRz85NBCfJALYPNdieWwzQSstrUuTms1gekn", "250/2%"],
+]);
 const TELEGRAM_MIGRATION_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_MIGRATION_THREAD_ID,
 );
@@ -204,7 +458,14 @@ const TELEGRAM_TRENDING_THREAD_ID = parseOptionalNumber(
 const TELEGRAM_LP_WALLET_THREAD_ID = parseOptionalNumber(
   process.env.TELEGRAM_LP_WALLET_THREAD_ID,
 );
+const TELEGRAM_NEW_DLMM_POOL_THREAD_ID = parseOptionalNumber(
+  process.env.TELEGRAM_NEW_DLMM_POOL_THREAD_ID,
+);
+const TELEGRAM_WALLET_ACTIVITY_THREAD_ID =
+  parseOptionalNumber(process.env.TELEGRAM_WALLET_ACTIVITY_THREAD_ID) ?? 4184;
 const BOT_STARTED_AT = Date.now();
+const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX = "493b2478ed536cc6";
+const DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX_ALT = "dfab05ba75a6ad57";
 
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS ?? "15000");
 const FORWARD_ALL_MIGRATED =
@@ -220,6 +481,38 @@ const PIPELINE_SUMMARY_EVERY_TICKS = Number(
 const DEBUG_CANDLE_SELECTION =
   (process.env.DEBUG_CANDLE_SELECTION ?? "false").toLowerCase() === "true";
 const GMGN_RETRY_COUNT = Number(process.env.GMGN_RETRY_COUNT ?? "5");
+const SCREENER_CONFIG: ScreenerConfig = {
+  minTwoCandleAvgVolume: Number(
+    process.env.MIN_TWO_CANDLE_AVG_VOLUME ?? "18000",
+  ),
+  minSolPer10kMc: Number(process.env.MIN_SOL_PER_10K_MC ?? "0.8"),
+  maxSolPer10kMc: Number(process.env.MAX_SOL_PER_10K_MC ?? "1"),
+  maxTop10HolderRate: Number(process.env.MAX_TOP10_HOLDER_RATE ?? "0.28"),
+  maxCreatorHoldRate: Number(process.env.MAX_CREATOR_HOLD_RATE ?? "0.07"),
+  maxBundlerRate: Number(process.env.MAX_BUNDLER_RATE ?? "0.45"),
+  maxRatTraderRatio: Number(process.env.MAX_RAT_TRADER_RATIO ?? "0.08"),
+  maxTopBuyerSoldRatio: Number(process.env.MAX_TOP_BUYER_SOLD_RATIO ?? "0.9"),
+  maxBuyTax: Number(process.env.MAX_BUY_TAX ?? "0"),
+  maxSellTax: Number(process.env.MAX_SELL_TAX ?? "0"),
+  maxTopHolderFundingSourceAvgAgeHours: Number(
+    process.env.TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS ?? "24",
+  ),
+  minRepeatedTopHolderBalanceRate: Number(
+    process.env.TOP_HOLDER_EQUAL_BALANCE_MIN_REPEAT_RATE ?? "0.6",
+  ),
+  minRepeatedTopHolderSupplyRate: Number(
+    process.env.TOP_HOLDER_EQUAL_SUPPLY_MIN_REPEAT_RATE ?? "0.6",
+  ),
+  maxTopHolderSupplyUniformityCv: Number(
+    process.env.TOP_HOLDER_SUPPLY_UNIFORMITY_MAX_CV ?? "0.12",
+  ),
+  strongScoreThreshold: Number(process.env.STRONG_SCORE_THRESHOLD ?? "65"),
+  tradeableScoreThreshold: Number(
+    process.env.TRADEABLE_SCORE_THRESHOLD ?? "45",
+  ),
+  watchScoreThreshold: Number(process.env.WATCH_SCORE_THRESHOLD ?? "25"),
+  highRiskScoreThreshold: Number(process.env.HIGH_RISK_SCORE_THRESHOLD ?? "10"),
+};
 const GMGN_RETRY_DELAY_MS = Number(process.env.GMGN_RETRY_DELAY_MS ?? "2500");
 const ENABLE_GMGN_TRENDING =
   (process.env.ENABLE_GMGN_TRENDING ?? "false").toLowerCase() === "true";
@@ -228,8 +521,24 @@ const GMGN_TRENDING_INTERVAL_MS = Number(
 );
 const ENABLE_LP_WALLET_TRACKER =
   (process.env.ENABLE_LP_WALLET_TRACKER ?? "false").toLowerCase() === "true";
+const ENABLE_WALLET_ACTIVITY_TRACKER =
+  (process.env.ENABLE_WALLET_ACTIVITY_TRACKER ?? "false").toLowerCase() === "true";
+const ENABLE_NEW_DLMM_POOL_TRACKER =
+  (process.env.ENABLE_NEW_DLMM_POOL_TRACKER ?? "false").toLowerCase() === "true";
 const LP_WALLET_TRACKER_INTERVAL_MS = Number(
   process.env.LP_WALLET_TRACKER_INTERVAL_MS ?? "60000",
+);
+const WALLET_ACTIVITY_TRACKER_INTERVAL_MS = Number(
+  process.env.WALLET_ACTIVITY_TRACKER_INTERVAL_MS ?? "30000",
+);
+const NEW_DLMM_POOL_MIN_VOLUME = Number(
+  process.env.NEW_DLMM_POOL_MIN_VOLUME ?? "5000",
+);
+const NEW_DLMM_POOL_TIER1_INTERVAL_MS = Number(
+  process.env.NEW_DLMM_POOL_TIER1_INTERVAL_MS ?? "20000",
+);
+const NEW_DLMM_POOL_TIER2_INTERVAL_MS = Number(
+  process.env.NEW_DLMM_POOL_TIER2_INTERVAL_MS ?? "40000",
 );
 const LP_WALLET_ENRICHMENT_RETRY_COUNT = Number(
   process.env.LP_WALLET_ENRICHMENT_RETRY_COUNT ?? "3",
@@ -237,21 +546,62 @@ const LP_WALLET_ENRICHMENT_RETRY_COUNT = Number(
 const LP_WALLET_ENRICHMENT_RETRY_DELAY_MS = Number(
   process.env.LP_WALLET_ENRICHMENT_RETRY_DELAY_MS ?? "5000",
 );
+const LP_WALLET_SHARD_COUNT = Math.max(
+  1,
+  Number(process.env.LP_WALLET_SHARD_COUNT ?? "1"),
+);
+const METEORA_POOL_META_CACHE_TTL_MS = Number(
+  process.env.METEORA_POOL_META_CACHE_TTL_MS ?? "3600000",
+);
 const LP_TRACKED_WALLETS_FILE =
   process.env.LP_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-lp-wallets.json");
+const WALLET_ACTIVITY_TRACKED_WALLETS_FILE =
+  process.env.WALLET_ACTIVITY_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-wallet-activity-wallets.json");
+const TOP_HOLDER_ANALYSIS_COUNT = Math.max(
+  3,
+  Number(process.env.TOP_HOLDER_ANALYSIS_COUNT ?? "9"),
+);
+const TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS = Number(
+  process.env.TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS ?? "24",
+);
+const TOP_HOLDER_EQUAL_BALANCE_MIN_REPEAT_RATE = Number(
+  process.env.TOP_HOLDER_EQUAL_BALANCE_MIN_REPEAT_RATE ?? "0.6",
+);
+const TOP_HOLDER_EQUAL_SUPPLY_MIN_REPEAT_RATE = Number(
+  process.env.TOP_HOLDER_EQUAL_SUPPLY_MIN_REPEAT_RATE ?? "0.6",
+);
+const TOP_HOLDER_SUPPLY_UNIFORMITY_MAX_CV = Number(
+  process.env.TOP_HOLDER_SUPPLY_UNIFORMITY_MAX_CV ?? "0.12",
+);
 const LP_TRACKED_WALLETS = loadTrackedLpWallets();
+const WALLET_ACTIVITY_TRACKED_WALLETS = loadTrackedWalletActivityWallets();
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
 const WATCH_PROGRAM_IDS = new Set(splitCsv(process.env.WATCH_PROGRAM_IDS));
+const OUTCOME_HORIZONS_MINUTES = splitCsv(
+  process.env.OUTCOME_HORIZONS_MINUTES ?? "5,15,60",
+)
+  .map((v) => Number(v))
+  .filter((v) => Number.isFinite(v) && v > 0)
+  .sort((a, b) => a - b);
+const OUTCOME_POLL_INTERVAL_MS = Number(
+  process.env.OUTCOME_POLL_INTERVAL_MS ?? "60000",
+);
 
 const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const GMGN_MULTI_INFO_URL = "https://gmgn.ai/api/v1/mutil_window_token_info";
 const GMGN_MULTI_TOKEN_INFO_URL = "https://gmgn.ai/mrwapi/v1/multi_token_info";
 const GMGN_TOKEN_SECURITY_URL = "https://gmgn.ai/api/v1/token_security_sol/sol";
+const GMGN_TOKEN_STAT_URL = "https://gmgn.ai/api/v1/token_stat/sol";
+const GMGN_TAG_WALLET_COUNT_URL =
+  "https://gmgn.ai/api/v1/token_wallet_tags_stat/sol";
+const GMGN_TOP_BUYERS_URL =
+  "https://gmgn.ai/defi/quotation/v1/tokens/top_buyers/sol";
 const GMGN_TOKEN_MCAP_CANDLES_URL =
   "https://gmgn.ai/api/v1/token_mcap_candles/sol";
 const GMGN_QUOTE_API_URL =
   "https://gmgn.ai/defi/quotation/v1/smartmoney/sol/walletstat";
 const GMGN_TRENDING_URL = "https://gmgn.ai/api/v1/rank/sol/swaps/1m";
+const GMGN_TOP_HOLDER_STATS_URL = "https://gmgn.ai/vas/api/v1/token_holders/sol";
 const GMGN_QUOTE_WALLET =
   process.env.GMGN_QUOTE_WALLET ??
   "HVHAvzNxQUhvTWr5uoNNNfrQYfzcsReUFM4HnZwfeHkQ";
@@ -279,9 +629,23 @@ const deferredVolumeCandidates = new Map<
   string,
   { signature: string; migratedTimestamp: number }
 >();
+const pendingOutcomes = new Map<
+  string,
+  {
+    row: CandidateDatasetRow;
+    horizonsRemaining: number[];
+    nextCheckAt: number;
+  }
+>();
+const loggedPreCandidateDrops = new Set<string>();
 const loggedSecurityNotReadyMints = new Set<string>();
 const seenTrendingMints = new Map<string, number>();
 const trackedLpWalletPositionKeysByWallet = new Map<string, Set<string>>();
+const trackedWalletActivitySignaturesByWallet = new Map<string, Set<string>>();
+const meteoraPoolMetaCache = new Map<
+  string,
+  { value: MeteoraPool | null; expiresAt: number }
+>();
 const inFlightMints = new Set<string>();
 let isScanTickRunning = false;
 let telegramUpdateOffset = 0;
@@ -307,7 +671,17 @@ async function main(): Promise<void> {
     `[boot] lp wallet tracker enabled=${ENABLE_LP_WALLET_TRACKER} interval=${LP_WALLET_TRACKER_INTERVAL_MS}ms wallets=${LP_TRACKED_WALLETS.length}`,
   );
   console.log(
+    `[boot] wallet activity tracker enabled=${ENABLE_WALLET_ACTIVITY_TRACKER} interval=${WALLET_ACTIVITY_TRACKER_INTERVAL_MS}ms wallets=${WALLET_ACTIVITY_TRACKED_WALLETS.length} thread=${TELEGRAM_WALLET_ACTIVITY_THREAD_ID}`,
+  );
+  console.log(
+    `[boot] new dlmm pool tracker enabled=${ENABLE_NEW_DLMM_POOL_TRACKER} min_volume=${NEW_DLMM_POOL_MIN_VOLUME} tier1=${NEW_DLMM_POOL_TIER1_INTERVAL_MS}ms tier2=${NEW_DLMM_POOL_TIER2_INTERVAL_MS}ms`,
+  );
+  console.log(
     `[boot] lp enrichment retry count=${LP_WALLET_ENRICHMENT_RETRY_COUNT} delay=${LP_WALLET_ENRICHMENT_RETRY_DELAY_MS}ms`,
+  );
+  console.log(`[boot] lp wallet shard count=${LP_WALLET_SHARD_COUNT}`);
+  console.log(
+    `[boot] meteora pool meta cache ttl=${METEORA_POOL_META_CACHE_TTL_MS}ms`,
   );
   if (FORWARD_ALL_MIGRATED) {
     console.log(
@@ -317,8 +691,11 @@ async function main(): Promise<void> {
 
   await bootstrapCursors();
   await bootstrapTrackedLpWalletPositions();
+  await bootstrapTrackedWalletActivity();
+  await bootstrapDlmmPresetMonitor();
   void startTelegramPingListener();
   setInterval(scanTick, SCAN_INTERVAL_MS);
+  setInterval(processPendingOutcomes, OUTCOME_POLL_INTERVAL_MS);
   await scanTick();
 }
 
@@ -334,27 +711,131 @@ async function bootstrapCursors(): Promise<void> {
   }
 }
 
+async function bootstrapDlmmPresetMonitor(): Promise<void> {
+  if (!ENABLE_NEW_DLMM_POOL_TRACKER) {
+    return;
+  }
+
+  for (const address of [...DLMM_PRESET_TIER_1, ...DLMM_PRESET_TIER_2]) {
+    const sigs = await getSignaturesForAddress(address, 1);
+    if (sigs[0]?.signature) {
+      newestSignatureByAddress.set(address, sigs[0].signature);
+      console.log(`[bootstrap] dlmm preset cursor for ${address} = ${sigs[0].signature}`);
+    } else {
+      console.log(`[bootstrap] dlmm preset no recent signatures for ${address}`);
+    }
+  }
+}
+
+function getOrderedLpTrackedWallets(): TrackedLpWallet[] {
+  return [...LP_TRACKED_WALLETS].sort((a, b) => {
+    const aPriority = a.priority ?? 100;
+    const bPriority = b.priority ?? 100;
+    if (aPriority !== bPriority) {
+      return aPriority - bPriority;
+    }
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function getLpWalletShardForTick(tick: number): TrackedLpWallet[] {
+  const ordered = getOrderedLpTrackedWallets();
+  if (ordered.length === 0) {
+    return [];
+  }
+  const shardCount = Math.max(1, Math.min(LP_WALLET_SHARD_COUNT, ordered.length));
+  const shardIndex = tick % shardCount;
+  return ordered.filter((_, idx) => idx % shardCount === shardIndex);
+}
+
 async function bootstrapTrackedLpWalletPositions(): Promise<void> {
   if (!ENABLE_LP_WALLET_TRACKER || LP_TRACKED_WALLETS.length === 0) {
     return;
   }
 
-  for (const wallet of LP_TRACKED_WALLETS) {
+  for (const wallet of getOrderedLpTrackedWallets()) {
     try {
       const positions = await fetchTrackedWalletPositions(wallet);
-      const keys = new Set<string>();
+      const freshKeys = new Set<string>();
       for (const position of positions) {
-        keys.add(
+        freshKeys.add(
           buildTrackedWalletPositionKey(position.walletAddress, position.positionAddress),
         );
       }
-      trackedLpWalletPositionKeysByWallet.set(wallet.address, keys);
+      trackedLpWalletPositionKeysByWallet.set(wallet.address, freshKeys);
       console.log(
         `[bootstrap] lp wallet ${wallet.label} (${wallet.address}) positions=${positions.length}`,
       );
     } catch (err) {
       console.error(
         `[bootstrap] lp wallet tracker failed for ${wallet.label} (${wallet.address})`,
+        err,
+      );
+    }
+  }
+}
+
+function getOrderedTrackedWalletActivityWallets(): TrackedWalletActivity[] {
+  return [...WALLET_ACTIVITY_TRACKED_WALLETS].sort((a, b) => {
+    const aPriority = a.priority ?? 100;
+    const bPriority = b.priority ?? 100;
+    if (aPriority !== bPriority) {
+      return aPriority - bPriority;
+    }
+    return a.label.localeCompare(b.label);
+  });
+}
+
+async function bootstrapTrackedWalletActivity(): Promise<void> {
+  if (!ENABLE_WALLET_ACTIVITY_TRACKER || WALLET_ACTIVITY_TRACKED_WALLETS.length === 0) {
+    return;
+  }
+
+  for (const wallet of getOrderedTrackedWalletActivityWallets()) {
+    try {
+      const sigs = await getSignaturesForAddress(wallet.address, 25);
+      trackedWalletActivitySignaturesByWallet.set(
+        wallet.address,
+        new Set(sigs.map((sig) => sig.signature)),
+      );
+      console.log(
+        `[bootstrap] wallet activity ${wallet.label} (${wallet.address}) signatures=${sigs.length}`,
+      );
+    } catch (err) {
+      console.error(
+        `[bootstrap] wallet activity tracker failed for ${wallet.label} (${wallet.address})`,
+        err,
+      );
+    }
+  }
+}
+
+async function processWalletActivityTrackerTick(): Promise<void> {
+  for (const wallet of getOrderedTrackedWalletActivityWallets()) {
+    try {
+      const knownSignatures =
+        trackedWalletActivitySignaturesByWallet.get(wallet.address) ?? new Set<string>();
+      const sigs = await getSignaturesForAddress(wallet.address, 25);
+      const fresh = sigs.filter((sig) => !sig.err && !knownSignatures.has(sig.signature));
+      if (fresh.length === 0) {
+        continue;
+      }
+
+      fresh.reverse();
+      for (const sig of fresh) {
+        await sendWalletActivityTelegramAlert(wallet, sig);
+      }
+
+      trackedWalletActivitySignaturesByWallet.set(
+        wallet.address,
+        new Set(sigs.map((sig) => sig.signature)),
+      );
+      console.log(
+        `[wallet-activity] alerted wallet=${wallet.label} count=${fresh.length}`,
+      );
+    } catch (err) {
+      console.error(
+        `[wallet-activity] tracker error for ${wallet.label} (${wallet.address})`,
         err,
       );
     }
@@ -371,6 +852,28 @@ async function scanTick(): Promise<void> {
     await processDeferredVolumeCandidates();
     for (const address of WATCH_ADDRESSES) {
       await scanAddress(address);
+    }
+    if (ENABLE_NEW_DLMM_POOL_TRACKER) {
+      const tier1EveryTicks = Math.max(
+        1,
+        Math.round(NEW_DLMM_POOL_TIER1_INTERVAL_MS / SCAN_INTERVAL_MS),
+      );
+      const tier2EveryTicks = Math.max(
+        1,
+        Math.round(NEW_DLMM_POOL_TIER2_INTERVAL_MS / SCAN_INTERVAL_MS),
+      );
+
+      if (tickCounter % tier1EveryTicks === 0) {
+        for (const address of DLMM_PRESET_TIER_1) {
+          await scanAddress(address);
+        }
+      }
+
+      if (tickCounter % tier2EveryTicks === 0) {
+        for (const address of DLMM_PRESET_TIER_2) {
+          await scanAddress(address);
+        }
+      }
     }
     if (
       ENABLE_GMGN_TRENDING &&
@@ -394,6 +897,18 @@ async function scanTick(): Promise<void> {
         0
     ) {
       await processLpWalletTrackerTick();
+    }
+    if (
+      ENABLE_WALLET_ACTIVITY_TRACKER &&
+      WALLET_ACTIVITY_TRACKED_WALLETS.length > 0 &&
+      tickCounter %
+        Math.max(
+          1,
+          Math.round(WALLET_ACTIVITY_TRACKER_INTERVAL_MS / SCAN_INTERVAL_MS),
+        ) ===
+        0
+    ) {
+      await processWalletActivityTrackerTick();
     }
     tickCounter += 1;
     maybePrintPipelineSummary();
@@ -440,6 +955,8 @@ async function processSignature(signature: string): Promise<void> {
     return;
   }
 
+  await processNewDlmmPoolSignature(signature, tx);
+
   const mints = extractMigratedMints(tx);
   for (const mint of mints) {
     if (seenMints.has(mint)) {
@@ -459,6 +976,270 @@ async function processDeferredVolumeCandidates(): Promise<void> {
       "deferred",
     );
   }
+}
+
+async function processPendingOutcomes(): Promise<void> {
+  const now = Date.now();
+  for (const [mint, pending] of pendingOutcomes.entries()) {
+    if (pending.horizonsRemaining.length === 0) {
+      pendingOutcomes.delete(mint);
+      continue;
+    }
+    if (pending.nextCheckAt > now) {
+      continue;
+    }
+
+    const horizonMinutes = pending.horizonsRemaining[0];
+    const targetTime =
+      new Date(pending.row.loggedAt).getTime() + horizonMinutes * 60_000;
+    if (targetTime > now) {
+      pending.nextCheckAt = targetTime;
+      continue;
+    }
+
+    const [gmgn, quotedMarketCap] = await Promise.all([
+      fetchGmgnTokenWithRetry(mint),
+      fetchGmgnQuoteMarketCap(mint),
+    ]);
+    const observedMarketCap =
+      quotedMarketCap ??
+      toNumber(gmgn?.market_cap) ??
+      toNumber(gmgn?.marketcap) ??
+      toNumber(gmgn?.fdv);
+    const observedPrice = toNumber(gmgn?.price?.price);
+    const marketCapStart = pending.row.baseline.marketCap;
+    const priceStart = pending.row.baseline.price;
+
+    const marketCapReturnPct =
+      marketCapStart !== null &&
+      observedMarketCap !== null &&
+      marketCapStart > 0
+        ? (observedMarketCap - marketCapStart) / marketCapStart
+        : null;
+    const priceReturnPct =
+      priceStart !== null && observedPrice !== null && priceStart > 0
+        ? (observedPrice - priceStart) / priceStart
+        : null;
+
+    const highPriceCandidates = [
+      toNumber(gmgn?.price?.price_high_1m),
+      toNumber(gmgn?.price?.price_high_5m),
+      observedPrice,
+    ].filter((v): v is number => v !== null);
+    const lowPriceCandidates = [
+      toNumber(gmgn?.price?.price_low_1m),
+      toNumber(gmgn?.price?.price_low_5m),
+      observedPrice,
+    ].filter((v): v is number => v !== null);
+    const maxObservedPrice = highPriceCandidates.length > 0 ? Math.max(...highPriceCandidates) : null;
+    const minObservedPrice = lowPriceCandidates.length > 0 ? Math.min(...lowPriceCandidates) : null;
+    const maxPriceReturnPct =
+      priceStart !== null && maxObservedPrice !== null && priceStart > 0
+        ? (maxObservedPrice - priceStart) / priceStart
+        : priceReturnPct;
+    const minPriceReturnPct =
+      priceStart !== null && minObservedPrice !== null && priceStart > 0
+        ? (minObservedPrice - priceStart) / priceStart
+        : priceReturnPct;
+
+    const maxReturnPct = maxPriceReturnPct ?? marketCapReturnPct;
+    const minReturnPct = minPriceReturnPct ?? marketCapReturnPct;
+
+    await logOutcomeRow({
+      kind: "outcome",
+      loggedAt: new Date().toISOString(),
+      mint,
+      observedAt: new Date().toISOString(),
+      horizonMinutes,
+      marketCapStart,
+      marketCapObserved: observedMarketCap,
+      priceStart,
+      priceObserved: observedPrice,
+      returnPct: marketCapReturnPct,
+      priceReturnPct,
+      maxReturnPctWithinHorizon: maxReturnPct,
+      minReturnPctWithinHorizon: minReturnPct,
+      maxPriceReturnPctWithinHorizon: maxPriceReturnPct,
+      minPriceReturnPctWithinHorizon: minPriceReturnPct,
+      hit30WithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 0.3,
+      hit50WithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 0.5,
+      hit100WithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 1.0,
+      hitMinus30WithinHorizon: (minReturnPct ?? Number.POSITIVE_INFINITY) <= -0.3,
+      hitMinus50WithinHorizon: (minReturnPct ?? Number.POSITIVE_INFINITY) <= -0.5,
+      styleBaseHitWithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 0.3,
+      styleDoubleHitWithinHorizon: (maxReturnPct ?? Number.NEGATIVE_INFINITY) >= 1.0,
+      styleFailedFastWithinHorizon: (minReturnPct ?? Number.POSITIVE_INFINITY) <= -0.3,
+    });
+
+    pending.horizonsRemaining.shift();
+    pending.nextCheckAt = now + OUTCOME_POLL_INTERVAL_MS;
+    if (pending.horizonsRemaining.length === 0) {
+      pendingOutcomes.delete(mint);
+    }
+  }
+}
+
+async function logDroppedPreCandidate(input: {
+  mint: string;
+  signature: string;
+  source: "new" | "deferred";
+  dropStage:
+    | "launchpad"
+    | "security"
+    | "migrated_timestamp"
+    | "candles"
+    | "volume_gate"
+    | "ratio_gate"
+    | "scored";
+  dropReason: string;
+  migratedTimestampHint?: number;
+  gmgn?: GmgnToken | null;
+  marketCap?: number | null;
+  totalFee?: number | null;
+}): Promise<void> {
+  const dedupeKey = [
+    input.mint,
+    input.signature,
+    input.dropStage,
+    input.dropReason,
+  ].join(":");
+  if (loggedPreCandidateDrops.has(dedupeKey)) {
+    return;
+  }
+  loggedPreCandidateDrops.add(dedupeKey);
+
+  await logPreCandidateRow(
+    buildPreCandidateRow({
+      mint: input.mint,
+      signature: input.signature,
+      source: input.source,
+      dropStage: input.dropStage,
+      dropReason: input.dropReason,
+      migratedTimestampHint: input.migratedTimestampHint ?? null,
+      symbol: input.gmgn?.symbol ?? null,
+      name: input.gmgn?.name ?? null,
+      marketCap: input.marketCap ?? null,
+      totalFee: input.totalFee ?? null,
+    }),
+  );
+}
+
+const seenDlmmPools = new Map<string, number>();
+
+async function processNewDlmmPoolSignature(
+  signature: string,
+  tx: ParsedTransaction,
+): Promise<void> {
+  if (!ENABLE_NEW_DLMM_POOL_TRACKER) {
+    return;
+  }
+
+  const dlmmPool = extractNewDlmmPoolFromTx(tx, signature);
+  if (!dlmmPool) {
+    return;
+  }
+
+  if (seenDlmmPools.has(dlmmPool.poolAddress)) {
+    return;
+  }
+
+  const gmgn = await fetchGmgnTokenWithRetry(dlmmPool.nonSolMint);
+  const volume5m = toNumber(gmgn?.price?.volume_5m) ?? toNumber(gmgn?.volume_5m) ?? 0;
+  const volume1m = toNumber(gmgn?.price?.volume_1m) ?? toNumber(gmgn?.volume_1m) ?? 0;
+  const buys1m = gmgn?.price?.buys_1m ?? 0;
+  const sells1m = gmgn?.price?.sells_1m ?? 0;
+  const hasActivity =
+    volume5m >= NEW_DLMM_POOL_MIN_VOLUME &&
+    (buys1m > 0 || sells1m > 0 || volume1m > 0);
+
+  if (!hasActivity) {
+    console.log(
+      `[dlmm-pool] skip pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} vol5m=${fmtNum(volume5m)} vol1m=${fmtNum(volume1m)}`,
+    );
+    return;
+  }
+
+  seenDlmmPools.set(dlmmPool.poolAddress, Date.now());
+  console.log(
+    `[dlmm-pool] alert pool=${dlmmPool.poolAddress} mint=${dlmmPool.nonSolMint} vol5m=${fmtNum(volume5m)} vol1m=${fmtNum(volume1m)}`,
+  );
+  await sendNewDlmmPoolTelegramAlert(signature, dlmmPool, gmgn, volume5m, volume1m);
+}
+
+function extractNewDlmmPoolFromTx(tx: ParsedTransaction, signature?: string): {
+  poolAddress: string;
+  nonSolMint: string;
+  tokenXMint: string;
+  tokenYMint: string;
+  creator: string | null;
+  presetAddress: string | null;
+  presetLabel: string | null;
+} | null {
+  const instructions = tx.transaction.message.instructions ?? [];
+  const accountKeys = (tx.transaction.message.accountKeys ?? []).map((k) =>
+    typeof k === "string" ? k : k.pubkey,
+  );
+  const creator = extractSignerFromAccountKeys(tx.transaction?.message?.accountKeys ?? []);
+
+  for (const ix of instructions) {
+    if (ix.programId !== DLMM_PROGRAM_ID) {
+      continue;
+    }
+    const data = ix.data ?? "";
+    if (!data) {
+      continue;
+    }
+    let hex = "";
+    try {
+      hex = Buffer.from(data, "base64").subarray(0, 8).toString("hex");
+    } catch {
+      console.log(
+        `[dlmm-pool-debug] sig=${signature ?? "unknown"} decode_failed program=${ix.programId} data_prefix=${String(data).slice(0, 24)}`,
+      );
+      continue;
+    }
+    if (
+      hex !== DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX &&
+      hex !== DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX_ALT
+    ) {
+      console.log(
+        `[dlmm-pool-debug] sig=${signature ?? "unknown"} discriminator_miss got=${hex} expected=${DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX}|${DLMM_INIT_LB_PAIR2_DISCRIMINATOR_HEX_ALT} accounts=${ix.accounts?.length ?? 0}`,
+      );
+      continue;
+    }
+
+    const poolAddress = ix.accounts?.[0];
+    const tokenXMint = ix.accounts?.[2];
+    const tokenYMint = ix.accounts?.[3];
+    const presetAddress = ix.accounts?.[7] ?? null;
+    if (!poolAddress || !tokenXMint || !tokenYMint) {
+      console.log(
+        `[dlmm-pool-debug] sig=${signature ?? "unknown"} missing_accounts pool=${poolAddress ?? "none"} tokenX=${tokenXMint ?? "none"} tokenY=${tokenYMint ?? "none"}`,
+      );
+      continue;
+    }
+
+    const nonSolMint = tokenXMint === SOL_MINT ? tokenYMint : tokenXMint;
+    if (!nonSolMint || nonSolMint === SOL_MINT) {
+      continue;
+    }
+
+    const presetLabel = presetAddress ? DLMM_PRESET_LABELS.get(presetAddress) ?? null : null;
+    console.log(
+      `[dlmm-pool-debug] sig=${signature ?? "unknown"} matched pool=${poolAddress} tokenX=${tokenXMint} tokenY=${tokenYMint} nonSol=${nonSolMint} creator=${creator ?? "none"} preset=${presetAddress ?? "none"} preset_label=${presetLabel ?? "unknown"}`,
+    );
+    return {
+      poolAddress,
+      nonSolMint,
+      tokenXMint,
+      tokenYMint,
+      creator,
+      presetAddress,
+      presetLabel,
+    };
+  }
+
+  return null;
 }
 
 async function processTrendingTick(): Promise<void> {
@@ -487,7 +1268,8 @@ async function processTrendingTick(): Promise<void> {
 }
 
 async function processLpWalletTrackerTick(): Promise<void> {
-  for (const wallet of LP_TRACKED_WALLETS) {
+  const shardWallets = getLpWalletShardForTick(tickCounter);
+  for (const wallet of shardWallets) {
     try {
       const positions = await fetchTrackedWalletPositions(wallet);
       const previousKeys =
@@ -530,22 +1312,43 @@ async function processMintCandidate(
     return;
   }
   inFlightMints.add(mint);
+
   try {
-    const [gmgn, launchpadInfo, securityInfo, quotedMarketCap] =
-      await Promise.all([
-        fetchGmgnTokenWithRetry(mint),
-        fetchGmgnLaunchpadInfo(mint),
-        fetchGmgnTokenSecurity(mint),
-        fetchGmgnQuoteMarketCap(mint),
-      ]);
+    const [
+      gmgn,
+      launchpadInfo,
+      securityInfo,
+      tokenStat,
+      tagWalletCount,
+      topBuyers,
+      quotedMarketCap,
+    ] = await Promise.all([
+      fetchGmgnTokenWithRetry(mint),
+      fetchGmgnLaunchpadInfo(mint),
+      fetchGmgnTokenSecurity(mint),
+      fetchGmgnTokenStat(mint),
+      fetchGmgnTagWalletCount(mint),
+      fetchGmgnTopBuyers(mint),
+      fetchGmgnQuoteMarketCap(mint),
+    ]);
     const launchSource = classifyLaunchSource(gmgn, launchpadInfo);
 
     if (launchpadInfo?.launchpad_platform === "pump_mayhem") {
       deferredVolumeCandidates.delete(mint);
       deferredVolumeMints.delete(mint);
+      await logDroppedPreCandidate({
+        mint,
+        signature,
+        source,
+        dropStage: "launchpad",
+        dropReason: "launchpad_platform=pump_mayhem",
+        migratedTimestampHint,
+        gmgn,
+      });
       logPipeline("skip", "launchpad", mint, "launchpad_platform_pump_mayhem");
       return;
     }
+
     const hasSecurityFlags =
       typeof securityInfo?.renounced_mint === "boolean" &&
       typeof securityInfo?.renounced_freeze_account === "boolean";
@@ -553,6 +1356,15 @@ async function processMintCandidate(
       deferredVolumeCandidates.set(mint, {
         signature,
         migratedTimestamp: migratedTimestampHint ?? 0,
+      });
+      await logDroppedPreCandidate({
+        mint,
+        signature,
+        source,
+        dropStage: "security",
+        dropReason: "security data not ready",
+        migratedTimestampHint,
+        gmgn,
       });
       logDeferredSecurityNotReady(mint);
       return;
@@ -565,6 +1377,19 @@ async function processMintCandidate(
     ) {
       deferredVolumeCandidates.delete(mint);
       deferredVolumeMints.delete(mint);
+      await logDroppedPreCandidate({
+        mint,
+        signature,
+        source,
+        dropStage: "security",
+        dropReason: `security gate failed (renounced_mint=${String(
+          securityInfo?.renounced_mint,
+        )}, renounced_freeze_account=${String(
+          securityInfo?.renounced_freeze_account,
+        )})`,
+        migratedTimestampHint,
+        gmgn,
+      });
       logPipeline(
         "skip",
         "security",
@@ -582,39 +1407,74 @@ async function processMintCandidate(
     if (!migratedTimestamp) {
       deferredVolumeCandidates.delete(mint);
       deferredVolumeMints.delete(mint);
+      await logDroppedPreCandidate({
+        mint,
+        signature,
+        source,
+        dropStage: "migrated_timestamp",
+        dropReason: "missing migrated_timestamp",
+        migratedTimestampHint,
+        gmgn,
+      });
       logPipeline("skip", "timestamp", mint, "missing_migrated_timestamp");
       return;
     }
 
-    const twoCandleVolume = await fetchTwoCandleAverageVolume(
+    const migrationCandles = await fetchMigrationCandles(
       mint,
       migratedTimestamp,
     );
-    if (twoCandleVolume.status !== "ok") {
+    if (migrationCandles.status !== "ok") {
       deferredVolumeMints.add(mint);
       deferredVolumeCandidates.set(mint, { signature, migratedTimestamp });
+      await logDroppedPreCandidate({
+        mint,
+        signature,
+        source,
+        dropStage: "candles",
+        dropReason: migrationCandles.reason,
+        migratedTimestampHint: migratedTimestamp,
+        gmgn,
+      });
       if (source === "new") {
         logPipeline(
           "defer",
           "volume",
           mint,
           "volume_waiting",
-          `reason=${twoCandleVolume.reason}`,
+          `reason=${migrationCandles.reason}`,
         );
       }
       return;
     }
+
     if (deferredVolumeMints.has(mint)) {
       logPipeline(
         "pass",
         "volume",
         mint,
         "volume_ready_after_defer",
-        `avg=${twoCandleVolume.average.toFixed(2)}`,
+        `avg=${migrationCandles.average.toFixed(2)}`,
       );
     }
-    if (twoCandleVolume.average < MIN_TWO_CANDLE_AVG_VOLUME) {
+
+    if (migrationCandles.average < MIN_TWO_CANDLE_AVG_VOLUME) {
       deferredVolumeCandidates.delete(mint);
+      await logDroppedPreCandidate({
+        mint,
+        signature,
+        source,
+        dropStage: "volume_gate",
+        dropReason: `volume gate failed avg=${migrationCandles.average.toFixed(2)}`,
+        migratedTimestampHint: migratedTimestamp,
+        gmgn,
+        totalFee: toNumber(gmgn?.total_fee),
+        marketCap:
+          quotedMarketCap ??
+          toNumber(gmgn?.market_cap) ??
+          toNumber(gmgn?.marketcap) ??
+          toNumber(gmgn?.fdv),
+      });
       if (deferredVolumeMints.has(mint)) {
         deferredVolumeMints.delete(mint);
         logPipeline(
@@ -622,7 +1482,7 @@ async function processMintCandidate(
           "volume",
           mint,
           "avg_below_threshold_after_defer",
-          `avg=${twoCandleVolume.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
+          `avg=${migrationCandles.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
         );
         return;
       }
@@ -631,17 +1491,18 @@ async function processMintCandidate(
         "volume",
         mint,
         "avg_below_threshold",
-        `avg=${twoCandleVolume.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
+        `avg=${migrationCandles.average.toFixed(2)} threshold=${MIN_TWO_CANDLE_AVG_VOLUME}`,
       );
       return;
     }
+
     if (deferredVolumeMints.has(mint)) {
       logPipeline(
         "pass",
         "volume",
         mint,
         "avg_above_threshold_after_defer",
-        `avg=${twoCandleVolume.average.toFixed(2)}`,
+        `avg=${migrationCandles.average.toFixed(2)}`,
       );
     }
 
@@ -661,6 +1522,17 @@ async function processMintCandidate(
           : null;
       deferredVolumeCandidates.delete(mint);
       deferredVolumeMints.delete(mint);
+      await logDroppedPreCandidate({
+        mint,
+        signature,
+        source,
+        dropStage: "ratio_gate",
+        dropReason: "fee/market-cap ratio gate failed",
+        migratedTimestampHint: migratedTimestamp,
+        gmgn,
+        totalFee,
+        marketCap,
+      });
       if (solPer10kMc === null) {
         logPipeline("skip", "ratio", mint, "ratio_input_missing");
       } else {
@@ -675,12 +1547,136 @@ async function processMintCandidate(
       return;
     }
 
-    const [dlmmPool, dammV2Pool] = await Promise.all([
+    const [dlmmPool, dammV2Pool, topHolderFunding] = await Promise.all([
       searchMeteoraPoolByType(mint, "dlmm"),
       searchMeteoraPoolByType(mint, "damm_v2"),
+      analyzeTopHolderFunding(mint),
     ]);
     const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
     const latestMarketCap = latestQuotedMarketCap ?? marketCap;
+
+    const topBuyersHolderInfo = Array.isArray(topBuyers?.holders?.holderInfo)
+      ? topBuyers.holders.holderInfo
+      : [];
+    const fastSniperCount = topBuyersHolderInfo.filter(
+      (h) => h.is_fast_sniper === 1,
+    ).length;
+
+    const features = buildScreenFeatures({
+      mint,
+      symbol: gmgn?.symbol ?? null,
+      name: gmgn?.name ?? null,
+      marketCap: latestMarketCap,
+      liquidity: toNumber(gmgn?.liquidity),
+      totalFee,
+      holderCount:
+        toNumber(tokenStat?.holder_count) ?? toNumber(gmgn?.holder_count),
+      top10HolderRate:
+        toNumber(tokenStat?.top_10_holder_rate) ??
+        toNumber(securityInfo?.top_10_holder_rate) ??
+        toNumber(gmgn?.dev?.top_10_holder_rate),
+      creatorHoldRate: toNumber(tokenStat?.creator_hold_rate),
+      devTeamHoldRate: toNumber(tokenStat?.dev_team_hold_rate),
+      privateVaultHoldRate: toNumber(tokenStat?.private_vault_hold_rate),
+      topBundlerTraderPercentage: toNumber(
+        tokenStat?.top_bundler_trader_percentage,
+      ),
+      topEntrapmentTraderPercentage: toNumber(
+        tokenStat?.top_entrapment_trader_percentage,
+      ),
+      freshWalletRate: toNumber(tokenStat?.fresh_wallet_rate),
+      bluechipOwnerPercentage: toNumber(tokenStat?.bluechip_owner_percentage),
+      botDegenRate: toNumber(tokenStat?.bot_degen_rate),
+      smartWallets: tagWalletCount?.smart_wallets ?? null,
+      freshWallets: tagWalletCount?.fresh_wallets ?? null,
+      renownedWallets: tagWalletCount?.renowned_wallets ?? null,
+      sniperWallets: tagWalletCount?.sniper_wallets ?? null,
+      ratTraderWallets: tagWalletCount?.rat_trader_wallets ?? null,
+      whaleWallets: tagWalletCount?.whale_wallets ?? null,
+      topWallets: tagWalletCount?.top_wallets ?? null,
+      topHolderFundingSourceAvgAgeHours:
+        topHolderFunding?.fundingSourceAvgAgeHours ?? null,
+      topHolderFundingSourceKnownCount:
+        topHolderFunding?.fundingSourceKnownCount ?? null,
+      topHolderYoungFundingSourceCount:
+        topHolderFunding?.youngFundingSourceCount ?? null,
+      topHolderRepeatedBalanceRate:
+        topHolderFunding?.repeatedBalanceRate ?? null,
+      topHolderRepeatedSupplyRate:
+        topHolderFunding?.repeatedSupplyRate ?? null,
+      topHolderSupplyUniformityCv:
+        topHolderFunding?.supplyUniformityCv ?? null,
+      fastSniperCount,
+      topBuyersHolderCount: topBuyers?.holders?.holder_count ?? null,
+      topBuyersSoldCount: topBuyers?.holders?.statusNow?.sold ?? null,
+      topBuyersSoldPartCount: topBuyers?.holders?.statusNow?.sold_part ?? null,
+      topBuyersHoldCount: topBuyers?.holders?.statusNow?.hold ?? null,
+      topBuyersHoldingRate: toNumber(
+        topBuyers?.holders?.statusNow?.holding_rate,
+      ),
+      topBuyersBoughtRate: toNumber(topBuyers?.holders?.statusNow?.bought_rate),
+      buyTax: toNumber(securityInfo?.buy_tax),
+      sellTax: toNumber(securityInfo?.sell_tax),
+      hideRisk: securityInfo?.hide_risk ?? null,
+      renouncedMint: securityInfo?.renounced_mint ?? null,
+      renouncedFreezeAccount: securityInfo?.renounced_freeze_account ?? null,
+      launchpadPlatform: launchpadInfo?.launchpad_platform ?? null,
+      hasDlmmPool: Boolean(dlmmPool?.pool_address),
+      hasDammV2Pool: Boolean(dammV2Pool?.pool_address),
+      priceNow: toNumber(gmgn?.price?.price),
+      price1m: toNumber(gmgn?.price?.price_1m),
+      price5m: toNumber(gmgn?.price?.price_5m),
+      buys1m: gmgn?.price?.buys_1m ?? null,
+      sells1m: gmgn?.price?.sells_1m ?? null,
+      buys5m: gmgn?.price?.buys_5m ?? null,
+      sells5m: gmgn?.price?.sells_5m ?? null,
+      volume1m: toNumber(gmgn?.price?.volume_1m),
+      volume5m: toNumber(gmgn?.price?.volume_5m),
+      buyVolume1m: toNumber(gmgn?.price?.buy_volume_1m),
+      sellVolume1m: toNumber(gmgn?.price?.sell_volume_1m),
+      buyVolume5m: toNumber(gmgn?.price?.buy_volume_5m),
+      sellVolume5m: toNumber(gmgn?.price?.sell_volume_5m),
+      swaps1m: gmgn?.price?.swaps_1m ?? null,
+      swaps5m: gmgn?.price?.swaps_5m ?? null,
+      hotLevel: gmgn?.price?.hot_level ?? null,
+      visitingCount: toNumber(gmgn?.visiting_count),
+      candles: migrationCandles.candles,
+    });
+    const score = scoreScreenFeatures(features, SCREENER_CONFIG);
+    const candidateRow = buildCandidateRow({
+      mint,
+      signature,
+      source,
+      migratedTimestamp,
+      symbol: gmgn?.symbol ?? null,
+      name: gmgn?.name ?? null,
+      baselineMarketCap: latestMarketCap,
+      baselinePrice: toNumber(gmgn?.price?.price),
+      features,
+      score,
+    });
+    await logCandidateRow(candidateRow);
+    if (!pendingOutcomes.has(mint)) {
+      pendingOutcomes.set(mint, {
+        row: candidateRow,
+        horizonsRemaining: [...OUTCOME_HORIZONS_MINUTES],
+        nextCheckAt: Date.now() + OUTCOME_POLL_INTERVAL_MS,
+      });
+    }
+
+    if (score.rejectReasons.length > 0) {
+      deferredVolumeCandidates.delete(mint);
+      deferredVolumeMints.delete(mint);
+      logPipeline(
+        "skip",
+        "alert",
+        mint,
+        "hard_reject",
+        score.rejectReasons.join(", "),
+      );
+      return;
+    }
+
     await sendTelegramAlert(
       "migration",
       gmgn,
@@ -689,10 +1685,13 @@ async function processMintCandidate(
       latestMarketCap,
       dlmmPool,
       dammV2Pool,
-      twoCandleVolume.average,
+      migrationCandles.average,
       signature,
+      features,
+      score,
       launchSource,
       launchpadInfo,
+      topHolderFunding,
     );
     deferredVolumeCandidates.delete(mint);
     if (deferredVolumeMints.has(mint)) {
@@ -1063,6 +2062,101 @@ async function fetchGmgnTokenSecurity(
   return json.data ?? null;
 }
 
+async function fetchGmgnTokenStat(mint: string): Promise<GmgnTokenStat | null> {
+  const res = await fetch(`${GMGN_TOKEN_STAT_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTokenStat; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTokenStat; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
+async function fetchGmgnTagWalletCount(
+  mint: string,
+): Promise<GmgnTagWalletCount | null> {
+  const res = await fetch(`${GMGN_TAG_WALLET_COUNT_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTagWalletCount; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTagWalletCount; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
+async function fetchGmgnTopBuyers(mint: string): Promise<GmgnTopBuyers | null> {
+  const res = await fetch(`${GMGN_TOP_BUYERS_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  let json: { data?: GmgnTopBuyers; code?: number };
+  try {
+    json = (await res.json()) as { data?: GmgnTopBuyers; code?: number };
+  } catch {
+    return null;
+  }
+  if (json.code !== undefined && json.code !== 0) {
+    return null;
+  }
+  return json.data ?? null;
+}
+
 async function fetchGmgnQuoteMarketCap(mint: string): Promise<number | null> {
   const url = new URL(`${GMGN_QUOTE_API_URL}/${GMGN_QUOTE_WALLET}`);
   url.searchParams.set("token_address", mint);
@@ -1215,6 +2309,12 @@ async function fetchDlmmPositionAccountsV2(
 async function fetchMeteoraPoolMeta(
   poolAddress: string,
 ): Promise<MeteoraPool | null> {
+  const cached = meteoraPoolMetaCache.get(poolAddress);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
   const url = new URL(METEORA_SEARCH_URL);
   url.searchParams.set("page_size", "20");
   url.searchParams.set("query", poolAddress);
@@ -1222,14 +2322,22 @@ async function fetchMeteoraPoolMeta(
 
   const res = await fetch(url.toString());
   if (!res.ok) {
+    meteoraPoolMetaCache.set(poolAddress, {
+      value: null,
+      expiresAt: now + Math.min(30000, METEORA_POOL_META_CACHE_TTL_MS),
+    });
     return null;
   }
 
   const json = (await res.json()) as { data?: MeteoraPool[] };
   const pools = Array.isArray(json.data) ? json.data : [];
-  return (
-    pools.find((pool) => pool.pool_address === poolAddress) ?? pools[0] ?? null
-  );
+  const value =
+    pools.find((pool) => pool.pool_address === poolAddress) ?? pools[0] ?? null;
+  meteoraPoolMetaCache.set(poolAddress, {
+    value,
+    expiresAt: now + METEORA_POOL_META_CACHE_TTL_MS,
+  });
+  return value;
 }
 
 async function fetchDlmmWalletPoolPositions(
@@ -1271,7 +2379,8 @@ async function fetchDlmmWalletPoolPositions(
     toNumber(poolMeta?.fee_pct) ??
     toNumber(poolMeta?.dlmm_params?.base_fee_percentage);
 
-  const byPosition = new Map<string, Partial<TrackedWalletPosition>>();  for (const row of rows) {
+  const byPosition = new Map<string, Partial<TrackedWalletPosition>>();
+  for (const row of rows) {
     const positionAddress = row.positionAddress ?? row.address ?? row.position;
     if (!positionAddress) {
       continue;
@@ -1322,11 +2431,16 @@ async function fetchDlmmWalletPoolPositions(
   return byPosition;
 }
 
-async function fetchTwoCandleAverageVolume(
+async function fetchMigrationCandles(
   mint: string,
   migratedTimestampSec: number,
 ): Promise<
-  { status: "ok"; average: number } | { status: "not_ready"; reason: string }
+  | {
+      status: "ok";
+      average: number;
+      candles: [CandlePoint, CandlePoint, CandlePoint];
+    }
+  | { status: "not_ready"; reason: string }
 > {
   const migratedCandleMs = Math.floor(migratedTimestampSec / 60) * 60 * 1000;
   const afterCandleMs = migratedCandleMs + 60_000;
@@ -1372,19 +2486,50 @@ async function fetchTwoCandleAverageVolume(
     return { status: "not_ready", reason: "candle_not_closed_yet" };
   }
 
-  const v0 = toNumber(candle0.volume);
-  const v1 = toNumber(candle1.volume);
-  if (v0 === null || v1 === null) {
-    return { status: "not_ready", reason: "candle_volume_missing" };
+  const parsed = [candle0, candle1, candle2].map((c) => ({
+    time: c.time as number,
+    open: toNumber(c.open),
+    high: toNumber(c.high),
+    low: toNumber(c.low),
+    close: toNumber(c.close),
+    volume: toNumber(c.volume),
+    amount: toNumber(c.amount),
+  }));
+
+  if (
+    parsed.some(
+      (c) =>
+        c.open === null ||
+        c.high === null ||
+        c.low === null ||
+        c.close === null ||
+        c.volume === null,
+    )
+  ) {
+    return { status: "not_ready", reason: "candle_value_missing" };
   }
+
+  const normalized = parsed.map((c) => ({
+    time: c.time,
+    open: c.open as number,
+    high: c.high as number,
+    low: c.low as number,
+    close: c.close as number,
+    volume: c.volume as number,
+    amount: c.amount,
+  })) as [CandlePoint, CandlePoint, CandlePoint];
 
   if (DEBUG_CANDLE_SELECTION) {
     console.log(
-      `[candle] ${mint} migrated_ts=${migratedTimestampSec} candle0=${migratedCandleMs} vol0=${v0.toFixed(6)} candle1=${afterCandleMs} vol1=${v1.toFixed(6)} avg=${((v0 + v1) / 2).toFixed(6)}`,
+      `[candle] ${mint} migrated_ts=${migratedTimestampSec} candle0=${migratedCandleMs} vol0=${normalized[0].volume.toFixed(6)} candle1=${afterCandleMs} vol1=${normalized[1].volume.toFixed(6)} avg=${((normalized[0].volume + normalized[1].volume) / 2).toFixed(6)}`,
     );
   }
 
-  return { status: "ok", average: (v0 + v1) / 2 };
+  return {
+    status: "ok",
+    average: (normalized[0].volume + normalized[1].volume) / 2,
+    candles: normalized,
+  };
 }
 
 async function searchMeteoraPoolByType(
@@ -1429,15 +2574,15 @@ async function sendTrendingTelegramAlert(
     `<b>GMGN Trending</b>`,
     "<u>Token Details</u>",
     `CA: <code>${escapeHtml(mint)}</code>`,
-    `Token Name: ${escapeHtml(token.name ?? "Unknown")}`,
-    `Token Symbol: ${escapeHtml(token.symbol ?? "Unknown")}`,
+    `Name: ${escapeHtml(token.name ?? "Unknown")}`,
+    `Symbol: ${escapeHtml(token.symbol ?? "Unknown")}`,
     `Source: ${escapeHtml(sourceLabel)} | Launchpad: ${escapeHtml(token.launchpad_platform ?? token.launchpad ?? "Unknown")} | Exchange: ${escapeHtml(token.exchange ?? "Unknown")}`,
     "",
     "<u>Token Stat</u>",
-    `Gas fee: ${fmtNum(totalFee)}`,
-    `Market cap: ${fmtNum(marketCap)}`,
-    `Volume: ${fmtNum(toNumber(token.volume))}`,
-    `Liquidity: ${fmtNum(toNumber(token.liquidity))}`,
+    `Total fee: ${fmtNum(totalFee)}`,
+    `MC: ${fmtNum(marketCap)}`,
+    `Vol: ${fmtNum(toNumber(token.volume))}`,
+    `Liq: ${fmtNum(toNumber(token.liquidity))}`,
     "",
     `<u>Quick Action</u>`,
     `${quickActions.join(" ● ")}`,
@@ -1464,6 +2609,69 @@ async function sendTrendingTelegramAlert(
   if (!res.ok) {
     const body = await res.text();
     console.error("[telegram] trending send failed", body);
+  }
+}
+
+async function sendNewDlmmPoolTelegramAlert(
+  signature: string,
+  pool: {
+    poolAddress: string;
+    nonSolMint: string;
+    tokenXMint: string;
+    tokenYMint: string;
+    creator: string | null;
+    presetAddress: string | null;
+    presetLabel: string | null;
+  },
+  gmgn: GmgnToken | null,
+  volume5m: number,
+  volume1m: number,
+): Promise<void> {
+  const gmgnLink = `https://gmgn.ai/sol/token/${pool.nonSolMint}`;
+  const dlmmLink = `https://app.meteora.ag/dlmm/${pool.poolAddress}`;
+  const solscanTxLink = `https://solscan.io/tx/${signature}`;
+  const poolMeta = await fetchMeteoraPoolMeta(pool.poolAddress);
+  const tokenXSymbol =
+    poolMeta?.mint_x_symbol ??
+    poolMeta?.token_x?.symbol ??
+    (pool.tokenXMint === pool.nonSolMint ? gmgn?.symbol : null) ??
+    (pool.tokenXMint === SOL_MINT ? "SOL" : shortenAddress(pool.tokenXMint));
+  const tokenYSymbol =
+    poolMeta?.mint_y_symbol ??
+    poolMeta?.token_y?.symbol ??
+    (pool.tokenYMint === pool.nonSolMint ? gmgn?.symbol : null) ??
+    (pool.tokenYMint === SOL_MINT ? "SOL" : shortenAddress(pool.tokenYMint));
+  const pairLabel = `${tokenXSymbol} / ${tokenYSymbol}`;
+  const text = [
+    `<b>New DLMM Pool</b>`,
+    `Pool: ${escapeHtml(pairLabel)}${pool.presetLabel ? ` (${escapeHtml(pool.presetLabel)})` : ""}`,
+    `DLMM Pool: <code>${escapeHtml(pool.poolAddress)}</code>`,
+    `Token: <code>${escapeHtml(pool.nonSolMint)}</code>`,
+    ...(pool.creator ? [`Creator: <code>${escapeHtml(pool.creator)}</code>`] : []),
+    `Vol 5m: ${fmtNum(volume5m)} | Vol 1m: ${fmtNum(volume1m)}`,
+    `Liquidity: ${fmtNum(toNumber(gmgn?.liquidity))}`,
+    "",
+    `<u>Quick Action</u>`,
+    `<a href="${gmgnLink}">GMG</a> ● <a href="${dlmmLink}">DLMM</a> ● <a href="${solscanTxLink}">TX</a>`,
+  ].join("\n");
+
+  const payloadBase = buildTelegramPayloadBase("new_dlmm_pool");
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payloadBase,
+        text,
+        disable_web_page_preview: true,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`telegram new dlmm pool send failed: ${res.status} ${body}`);
   }
 }
 
@@ -1510,6 +2718,43 @@ async function sendLpWalletTrackerAlert(
   }
 }
 
+async function sendWalletActivityTelegramAlert(
+  wallet: TrackedWalletActivity,
+  sig: SignatureInfo,
+): Promise<void> {
+  const solscanTxLink = `https://solscan.io/tx/${sig.signature}`;
+  const solscanWalletLink = `https://solscan.io/account/${wallet.address}`;
+  const gmgnWalletLink = `https://gmgn.ai/sol/address/${wallet.address}`;
+  const text = [
+    `<b>Wallet Activity</b>`,
+    `Wallet: <b>${escapeHtml(wallet.label)}</b> (<code>${escapeHtml(shortenAddress(wallet.address))}</code>)`,
+    `Signature: <code>${escapeHtml(sig.signature)}</code>`,
+    ...(sig.blockTime ? [`Time: ${escapeHtml(new Date(sig.blockTime * 1000).toISOString())}`] : []),
+    "",
+    `<u>Quick Action</u>`,
+    `<a href="${solscanTxLink}">TX</a> ● <a href="${solscanWalletLink}">WAL</a> ● <a href="${gmgnWalletLink}">GMG</a>`,
+  ].join("\n");
+
+  const payloadBase = buildTelegramPayloadBase("wallet_activity");
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payloadBase,
+        text,
+        disable_web_page_preview: true,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`telegram wallet activity send failed: ${res.status} ${body}`);
+  }
+}
+
 async function sendTelegramAlert(
   alertKind: AlertKind,
   token: GmgnToken | null,
@@ -1520,8 +2765,11 @@ async function sendTelegramAlert(
   dammV2Pool: MeteoraPool | null,
   twoCandleAvgVolume: number,
   signature: string,
+  features: ScreenFeatures,
+  score: ScreenScore,
   launchSource: LaunchSource = "unknown",
   launchpadInfo: GmgnMultiToken | null = null,
+  topHolderFunding: TopHolderFundingAnalysis | null = null,
 ): Promise<void> {
   const dlmmPoolAddress = dlmmPool?.pool_address ?? "None";
   const dammV2PoolAddress = dammV2Pool?.pool_address ?? "None";
@@ -1562,22 +2810,52 @@ async function sendTelegramAlert(
     quickActions.push(`<a href="${dammV2Link}">DAMMV2</a>`);
   }
 
+  const compactReasons = score.reasons.slice(0, 4).join(" | ") || "n/a";
+  const greenFlags = score.greenFlags.slice(0, 3).join(" | ") || "n/a";
+  const redFlags = score.redFlags.slice(0, 3).join(" | ") || "n/a";
+  const topHolderPatternText = topHolderFunding
+    ? [
+        `Repeat SOL: ${topHolderFunding.repeatedBalanceRate === null ? "Unknown" : `${(topHolderFunding.repeatedBalanceRate * 100).toFixed(0)}%`}${topHolderFunding.repeatedBalanceValue !== null ? ` @ ${fmtNum(topHolderFunding.repeatedBalanceValue)}` : ""}`,
+        `Repeat supply: ${topHolderFunding.repeatedSupplyRate === null ? "Unknown" : `${(topHolderFunding.repeatedSupplyRate * 100).toFixed(0)}%`}${topHolderFunding.repeatedSupplyValue !== null ? ` @ ${(topHolderFunding.repeatedSupplyValue * 100).toFixed(2)}%` : ""}`,
+        `Fresh tags: ${topHolderFunding.freshWalletTagCount} | Bundlers: ${topHolderFunding.bundlerTagCount}`,
+      ].join(" | ")
+    : "Unknown";
+  const topHolderRows =
+    topHolderFunding?.holders.slice(0, 4).map((holder) => {
+      const tags = holder.tags.length > 0 ? holder.tags.join(",") : "-";
+      const fundingSource = holder.fundingSourceAddress
+        ? `${holder.fundingSourceName ?? shortenAddress(holder.fundingSourceAddress)} <code>${escapeHtml(shortenAddress(holder.fundingSourceAddress))}</code>`
+        : "Unknown";
+      return `${escapeHtml(holder.rank)} ${escapeHtml(shortenAddress(holder.walletAddress))} | tags ${escapeHtml(tags)} | SOL ${holder.currentSolBalance === null ? "?" : fmtNum(holder.currentSolBalance)} | wallet age ${holder.walletAgeHours === null ? "?" : `${holder.walletAgeHours.toFixed(1)}h`} | fund ${fundingSource} | amt ${holder.fundingAmountSol === null ? "?" : fmtNum(holder.fundingAmountSol)} | fund age ${holder.fundingAgeHours === null ? "?" : `${holder.fundingAgeHours.toFixed(1)}h`}${holder.isSuspicious ? " | suspicious" : ""}`;
+    }) ?? [];
+
   const text = [
     `<b>${escapeHtml(title)}</b>`,
+    `${escapeHtml(score.verdict.toUpperCase())} · <b>${score.finalScore}</b>`,
     "<u>Token Details</u>",
     `CA: <code>${escapeHtml(mint)}</code>`,
-    `Token Name: ${escapeHtml(token?.name ?? "Unknown")}`,
-    `Token Symbol: ${escapeHtml(token?.symbol ?? "Unknown")}`,
+    `Name: ${escapeHtml(token?.name ?? "Unknown")}`,
+    `Symbol: ${escapeHtml(token?.symbol ?? "Unknown")}`,
     `Source: ${escapeHtml(sourceLabel)} | Launchpad: ${escapeHtml(rawLaunchpad)} | Exchange: ${escapeHtml(rawExchange)}`,
     "",
-    "<u>Token Stat</u>",
-    `Total fee: ${fmtNum(totalFee)}`,
-    `Market cap: ${fmtNum(marketCap)}`,
-    `2x1m Avg Volume: ${fmtNum(twoCandleAvgVolume)}`,
+    `<b>Why:</b> ${escapeHtml(compactReasons)}`,
+    `<b>Green:</b> ${escapeHtml(greenFlags)}`,
+    `<b>Red:</b> ${escapeHtml(redFlags)}`,
     "",
-    "<u>Meteora Pool</u>",
-    `DLMM Pool: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
-    `DAMMV2 Pool: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
+    `<u>Stats</u>`,
+    `MC: ${fmtNum(marketCap)} | Fee: ${fmtNum(totalFee)} | Ratio: ${features.solPer10kMc === null ? "Unknown" : features.solPer10kMc.toFixed(3)}`,
+    `2C Avg Vol: ${fmtNum(twoCandleAvgVolume)} | B/S 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
+    `Top10: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`} | Top buyers sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
+    `Smart: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)} | Rat: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)} | Fast snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
+    `Holder funder age: ${features.topHolderFundingSourceAvgAgeHours === null ? "Unknown" : `${features.topHolderFundingSourceAvgAgeHours.toFixed(1)}h`} | Equal SOL: ${features.topHolderRepeatedBalanceRate === null ? "Unknown" : `${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`} | Uniform cv: ${features.topHolderSupplyUniformityCv === null ? "Unknown" : features.topHolderSupplyUniformityCv.toFixed(3)}`,
+    `Top holder patterns: ${topHolderPatternText}`,
+    ...(topHolderRows.length > 0
+      ? ["", `<u>Top Holder Stats</u>`, ...topHolderRows]
+      : []),
+    "",
+    `<u>Pools</u>`,
+    `DLMM: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
+    `DAMMV2: ${dammV2PoolAddress === "None" ? "None" : `<code>${escapeHtml(dammV2PoolAddress)}</code>`}`,
     "",
     `<u>Quick Action</u>`,
     `${quickActions.join(" ● ")}`,
@@ -1724,7 +3002,12 @@ async function pollTelegramUpdates(): Promise<void> {
     ok?: boolean;
     result?: Array<{
       update_id: number;
-      message?: { text?: string; chat?: { id?: number | string } };
+      message?: {
+        text?: string;
+        message_thread_id?: number;
+        chat?: { id?: number | string };
+        from?: { id?: number | string };
+      };
     }>;
   };
   const updates = Array.isArray(json.result) ? json.result : [];
@@ -1732,11 +3015,17 @@ async function pollTelegramUpdates(): Promise<void> {
     telegramUpdateOffset = Math.max(telegramUpdateOffset, update.update_id + 1);
     const text = update.message?.text ?? "";
     const chatId = update.message?.chat?.id;
+    const senderId = update.message?.from?.id;
+    const messageThreadId = update.message?.message_thread_id;
     if (!text || chatId === undefined || chatId === null) {
       continue;
     }
     if (isTaggedPing(text)) {
       await respondPong(chatId);
+      continue;
+    }
+    if (!isAllowedTelegramUser(senderId)) {
+      continue;
     }
   }
 }
@@ -1747,17 +3036,217 @@ function isTaggedPing(text: string): boolean {
   return lower.includes("ping") && lower.includes(mention);
 }
 
+function isAllowedTelegramUser(senderId: number | string | undefined): boolean {
+  if (!TELEGRAM_ALLOWED_USER_ID) {
+    return true;
+  }
+  if (senderId === undefined || senderId === null) {
+    return false;
+  }
+  return String(senderId) === TELEGRAM_ALLOWED_USER_ID;
+}
+
 async function respondPong(chatId: number | string): Promise<void> {
   const uptimeSec = Math.floor((Date.now() - BOT_STARTED_AT) / 1000);
+  await sendTelegramPlainMessage(chatId, `pong\nuptime: ${uptimeSec}s`);
+}
+
+async function analyzeTopHolderFunding(
+  mint: string,
+): Promise<TopHolderFundingAnalysis | null> {
+  try {
+    const rows = await fetchGmgnTopHolderStats(mint);
+    const rankedRows = rows.slice(1, 1 + TOP_HOLDER_ANALYSIS_COUNT);
+    if (rankedRows.length === 0) {
+      return null;
+    }
+
+    const nowSec = Date.now() / 1000;
+    const holders: TopHolderFundingDetail[] = [];
+    const balances: number[] = [];
+    const balanceKeys: string[] = [];
+    const supplyShares: number[] = [];
+    const supplyKeys: string[] = [];
+    const fundingSourceAges: number[] = [];
+    let youngFundingSourceCount = 0;
+    let freshWalletTagCount = 0;
+    let bundlerTagCount = 0;
+
+    for (const row of rankedRows) {
+      const balance = toNumber(row.balance);
+      const supplyRate = toNumber(row.amount_percentage);
+      const currentSolBalanceLamports = toNumber(row.native_balance);
+      const currentSolBalance =
+        currentSolBalanceLamports !== null ? currentSolBalanceLamports / 1_000_000_000 : null;
+      const tags = [
+        ...(Array.isArray(row.tags) ? row.tags : []),
+        ...(Array.isArray(row.maker_token_tags) ? row.maker_token_tags : []),
+      ].filter((tag, index, arr) => Boolean(tag) && arr.indexOf(tag) === index);
+      const walletAgeHours =
+        typeof row.created_at === "number" && row.created_at > 0
+          ? Math.max(0, (nowSec - row.created_at) / 3600)
+          : null;
+      const fundingTimestamp =
+        typeof row.native_transfer?.timestamp === "number" && row.native_transfer.timestamp > 0
+          ? row.native_transfer.timestamp
+          : null;
+      const fundingAgeHours =
+        fundingTimestamp !== null ? Math.max(0, (nowSec - fundingTimestamp) / 3600) : null;
+      const fundingAmountSol = toNumber(row.native_transfer?.amount);
+
+      if (currentSolBalance !== null) {
+        balances.push(currentSolBalance);
+        balanceKeys.push(currentSolBalance.toFixed(6));
+      }
+      if (supplyRate !== null) {
+        supplyShares.push(supplyRate);
+        supplyKeys.push((supplyRate * 10000).toFixed(0));
+      }
+      if (fundingAgeHours !== null) {
+        fundingSourceAges.push(fundingAgeHours);
+        if (fundingAgeHours <= TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS) {
+          youngFundingSourceCount += 1;
+        }
+      }
+      if (tags.includes("fresh_wallet") || row.is_new === true) {
+        freshWalletTagCount += 1;
+      }
+      if (tags.includes("bundler")) {
+        bundlerTagCount += 1;
+      }
+
+      holders.push({
+        rank: row.wallet_tag_v2 ?? `TOP${holders.length + 2}`,
+        walletAddress: row.address ?? "",
+        walletTag: row.wallet_tag_v2 ?? null,
+        balance,
+        supplyRate,
+        currentSolBalance,
+        tags,
+        exchange: row.exchange ?? null,
+        isNew: row.is_new === true,
+        isSuspicious: row.is_suspicious === true,
+        walletAgeHours,
+        fundingSourceName: row.native_transfer?.name ?? null,
+        fundingSourceAddress: row.native_transfer?.from_address ?? null,
+        fundingAmountSol,
+        fundingAgeHours,
+        fundingTimestamp,
+      });
+    }
+
+    const repeatedBalance = calculateDominantRepeatRate(balanceKeys, balances);
+    const repeatedSupply = calculateDominantRepeatRate(supplyKeys, supplyShares);
+    const fundingSourceAvgAgeHours =
+      fundingSourceAges.length > 0
+        ? fundingSourceAges.reduce((sum, value) => sum + value, 0) / fundingSourceAges.length
+        : null;
+
+    return {
+      holderCountAnalyzed: holders.length,
+      fundingSourceKnownCount: fundingSourceAges.length,
+      fundingSourceAvgAgeHours,
+      youngFundingSourceCount,
+      repeatedBalanceRate: repeatedBalance.rate,
+      repeatedSupplyRate: repeatedSupply.rate,
+      supplyUniformityCv: calculateCoefficientOfVariation(supplyShares),
+      freshWalletTagCount,
+      bundlerTagCount,
+      repeatedBalanceValue: repeatedBalance.value,
+      repeatedSupplyValue: repeatedSupply.value,
+      holders,
+    };
+  } catch (err) {
+    console.error(`[holder-funding] analysis failed mint=${mint}`, err);
+    return null;
+  }
+}
+
+async function fetchGmgnTopHolderStats(
+  mint: string,
+): Promise<GmgnTopHolderStatRow[]> {
+  const res = await fetch(`${GMGN_TOP_HOLDER_STATS_URL}/${mint}`, {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: "https://gmgn.ai",
+      Referer: `https://gmgn.ai/sol/token/${mint}`,
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`gmgn top holder stats http ${res.status}`);
+  }
+
+  const json = (await res.json()) as {
+    code?: number;
+    data?: GmgnTopHolderStatsResponse;
+  };
+  if (json.code !== undefined && json.code !== 0) {
+    throw new Error(`gmgn top holder stats code ${String(json.code)}`);
+  }
+  return Array.isArray(json.data?.list) ? json.data.list : [];
+}
+
+function calculateDominantRepeatRate(
+  keys: string[],
+  rawValues: number[],
+): { rate: number | null; value: number | null } {
+  if (keys.length === 0 || rawValues.length === 0) {
+    return { rate: null, value: null };
+  }
+  const counts = new Map<string, { count: number; firstValue: number }>();
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    const rawValue = rawValues[i];
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      counts.set(key, { count: 1, firstValue: rawValue });
+    }
+  }
+  let best: { count: number; firstValue: number } | null = null;
+  for (const entry of counts.values()) {
+    if (!best || entry.count > best.count) {
+      best = entry;
+    }
+  }
+  return {
+    rate: best ? best.count / keys.length : null,
+    value: best?.firstValue ?? null,
+  };
+}
+
+function calculateCoefficientOfVariation(values: number[]): number | null {
+  if (values.length < 2) {
+    return null;
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  if (mean <= 0) {
+    return null;
+  }
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance) / mean;
+}
+
+async function sendTelegramPlainMessage(
+  chatId: number | string,
+  text: string,
+  messageThreadId?: number,
+): Promise<void> {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId,
-      text: `pong\nuptime: ${uptimeSec}s`,
+      text,
+      parse_mode: "HTML",
+      ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
     }),
   });
 }
+
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1766,10 +3255,15 @@ function sleep(ms: number): Promise<void> {
 async function getSignaturesForAddress(
   address: string,
   limit: number,
+  before?: string,
 ): Promise<SignatureInfo[]> {
   const result = await rpcCall<SignatureInfo[]>("getSignaturesForAddress", [
     address,
-    { limit, commitment: "confirmed" },
+    {
+      limit,
+      commitment: "confirmed",
+      ...(before ? { before } : {}),
+    },
   ]);
   return result ?? [];
 }
@@ -1791,26 +3285,38 @@ async function rpcCall<T>(
   method: string,
   params: unknown[],
 ): Promise<T | null> {
-  const res = await fetch(HELIUS_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method,
-      params,
-    }),
-  });
+  const maxAttempts = 4;
+  let lastStatus: number | null = null;
 
-  if (!res.ok) {
-    throw new Error(`rpc http error ${res.status}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const res = await fetch(HELIUS_RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+      }),
+    });
+
+    if (res.ok) {
+      const json = (await res.json()) as JsonRpcResponse<T>;
+      if (json.error) {
+        throw new Error(`rpc ${method} error: ${json.error.message}`);
+      }
+      return json.result ?? null;
+    }
+
+    lastStatus = res.status;
+    if (res.status !== 429 || attempt === maxAttempts) {
+      throw new Error(`rpc http error ${res.status}`);
+    }
+
+    await sleep(400 * attempt);
   }
 
-  const json = (await res.json()) as JsonRpcResponse<T>;
-  if (json.error) {
-    throw new Error(`rpc ${method} error: ${json.error.message}`);
-  }
-  return json.result ?? null;
+  throw new Error(`rpc http error ${lastStatus ?? "unknown"}`);
 }
 
 function buildTelegramPayloadBase(alertKind: AlertKind): {
@@ -1823,13 +3329,34 @@ function buildTelegramPayloadBase(alertKind: AlertKind): {
       ? TELEGRAM_TRENDING_THREAD_ID
       : alertKind === "lp_wallet_tracker"
         ? TELEGRAM_LP_WALLET_THREAD_ID
-        : TELEGRAM_MIGRATION_THREAD_ID;
+        : alertKind === "new_dlmm_pool"
+          ? TELEGRAM_NEW_DLMM_POOL_THREAD_ID
+          : alertKind === "wallet_activity"
+            ? TELEGRAM_WALLET_ACTIVITY_THREAD_ID
+            : TELEGRAM_MIGRATION_THREAD_ID;
 
   return {
     chat_id: TELEGRAM_CHAT_ID,
     parse_mode: "HTML",
     ...(messageThreadId !== null ? { message_thread_id: messageThreadId } : {}),
   };
+}
+
+function extractSignerFromAccountKeys(
+  accountKeys: Array<string | { pubkey: string; signer?: boolean }>,
+): string | null {
+  for (const key of accountKeys) {
+    if (typeof key === "string") {
+      continue;
+    }
+    if (key?.signer && key.pubkey) {
+      return key.pubkey;
+    }
+  }
+  if (accountKeys.length > 0 && typeof accountKeys[0] !== "string") {
+    return accountKeys[0]?.pubkey ?? null;
+  }
+  return null;
 }
 
 function splitCsv(input: string | undefined): string[] {
@@ -1839,7 +3366,9 @@ function splitCsv(input: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
+function parseTrackedWalletActivityWallets(
+  input: string | undefined,
+): TrackedWalletActivity[] {
   return splitCsv(input).flatMap((entry) => {
     const idx = entry.indexOf(":");
     if (idx === -1) {
@@ -1858,21 +3387,108 @@ function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
   });
 }
 
-function parseTrackedLpWalletFileRows(rows: unknown): TrackedLpWallet[] {
+function parseTrackedLpWallets(input: string | undefined): TrackedLpWallet[] {
+  return parseTrackedWalletActivityWallets(input);
+}
+
+function parseTrackedWalletActivityFileRows(
+  rows: unknown,
+  defaults?: TrackedWalletActivityFileSchema["defaults"],
+): TrackedWalletActivity[] {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  return rows.flatMap((row) => {
+    const item = row as TrackedWalletActivityRow;
+    const address = item.address?.trim();
+    const enabled = item.enabled ?? defaults?.enabled ?? true;
+    if (!address || enabled === false) {
+      return [];
+    }
+    return [{
+      address,
+      label: item.label?.trim() || shortenAddress(address),
+      enabled,
+      group: item.group?.trim() || defaults?.group,
+      priority: item.priority ?? defaults?.priority,
+      notes: item.notes?.trim(),
+    }];
+  });
+}
+
+function parseTrackedLpWalletFileRows(
+  rows: unknown,
+  defaults?: TrackedLpWalletFileSchema["defaults"],
+): TrackedLpWallet[] {
   if (!Array.isArray(rows)) {
     return [];
   }
   return rows.flatMap((row) => {
     const item = row as TrackedLpWalletFileRow;
     const address = item.address?.trim();
-    if (!address || item.enabled === false) {
+    const enabled = item.enabled ?? defaults?.enabled ?? true;
+    if (!address || enabled === false) {
       return [];
     }
     return [{
       address,
       label: item.label?.trim() || shortenAddress(address),
+      enabled,
+      group: item.group?.trim() || defaults?.group,
+      priority: item.priority ?? defaults?.priority,
+      notes: item.notes?.trim(),
     }];
   });
+}
+
+function parseTrackedWalletActivityFile(input: unknown): TrackedWalletActivity[] {
+  if (Array.isArray(input)) {
+    return parseTrackedWalletActivityFileRows(input);
+  }
+
+  const schema = input as TrackedWalletActivityFileSchema;
+  if (schema && Array.isArray(schema.wallets)) {
+    return parseTrackedWalletActivityFileRows(schema.wallets, schema.defaults);
+  }
+
+  return [];
+}
+
+function parseTrackedLpWalletFile(input: unknown): TrackedLpWallet[] {
+  if (Array.isArray(input)) {
+    return parseTrackedLpWalletFileRows(input);
+  }
+
+  const schema = input as TrackedLpWalletFileSchema;
+  if (schema && Array.isArray(schema.wallets)) {
+    return parseTrackedLpWalletFileRows(schema.wallets, schema.defaults);
+  }
+
+  return [];
+}
+
+function loadTrackedWalletActivityWallets(): TrackedWalletActivity[] {
+  try {
+    if (fs.existsSync(WALLET_ACTIVITY_TRACKED_WALLETS_FILE)) {
+      const raw = fs.readFileSync(WALLET_ACTIVITY_TRACKED_WALLETS_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      const wallets = parseTrackedWalletActivityFile(parsed);
+      if (wallets.length > 0) {
+        return wallets;
+      }
+      console.warn(
+        `[wallet-activity] tracked wallet file exists but yielded no enabled wallets: ${WALLET_ACTIVITY_TRACKED_WALLETS_FILE}`,
+      );
+      return [];
+    }
+  } catch (err) {
+    console.error(
+      `[wallet-activity] failed to load wallet file ${WALLET_ACTIVITY_TRACKED_WALLETS_FILE}`,
+      err,
+    );
+  }
+
+  return parseTrackedWalletActivityWallets(process.env.WALLET_ACTIVITY_TRACKED_WALLETS);
 }
 
 function loadTrackedLpWallets(): TrackedLpWallet[] {
@@ -1880,7 +3496,7 @@ function loadTrackedLpWallets(): TrackedLpWallet[] {
     if (fs.existsSync(LP_TRACKED_WALLETS_FILE)) {
       const raw = fs.readFileSync(LP_TRACKED_WALLETS_FILE, "utf8");
       const parsed = JSON.parse(raw);
-      const wallets = parseTrackedLpWalletFileRows(parsed);
+      const wallets = parseTrackedLpWalletFile(parsed);
       if (wallets.length > 0) {
         return wallets;
       }
@@ -1959,10 +3575,24 @@ function formatLpValue(position: TrackedWalletPosition): string {
 }
 
 function formatLpRange(position: TrackedWalletPosition): string {
-  if (position.minPrice !== null && position.minPrice !== undefined && position.maxPrice !== null && position.maxPrice !== undefined) {
-    return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}`;
+  if (
+    position.minPrice !== null &&
+    position.minPrice !== undefined &&
+    position.maxPrice !== null &&
+    position.maxPrice !== undefined
+  ) {
+    const widthPct =
+      position.maxPrice > 0
+        ? ((position.minPrice - position.maxPrice) / position.maxPrice) * 100
+        : null;
+    return `${trimNumber(position.minPrice)} ~ ${trimNumber(position.maxPrice)}${widthPct !== null ? ` (${widthPct.toFixed(2)}%)` : ""}`;
   }
-  if (position.lowerBinId !== null && position.lowerBinId !== undefined && position.upperBinId !== null && position.upperBinId !== undefined) {
+  if (
+    position.lowerBinId !== null &&
+    position.lowerBinId !== undefined &&
+    position.upperBinId !== null &&
+    position.upperBinId !== undefined
+  ) {
     return `Bin ${position.lowerBinId} ~ ${position.upperBinId}`;
   }
   return "Unknown";
@@ -1975,10 +3605,23 @@ function trimNumber(value: number): string {
   if (value === 0) {
     return "0";
   }
-  if (Math.abs(value) >= 1) {
-    return value.toFixed(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+
+  let decimals = 4;
+  const abs = Math.abs(value);
+  if (abs >= 1) {
+    decimals = 4;
+  } else if (abs >= 0.01) {
+    decimals = 6;
+  } else if (abs >= 0.0001) {
+    decimals = 8;
+  } else {
+    decimals = 12;
   }
-  return value.toPrecision(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+
+  return value
+    .toFixed(decimals)
+    .replace(/\.0+$/, "")
+    .replace(/(\.\d*?)0+$/, "$1");
 }
 
 function formatLpStrategy(strategy: string | null | undefined): string | null {
