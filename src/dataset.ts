@@ -72,12 +72,17 @@ export type OutcomeDatasetRow = {
   styleFailedFastWithinHorizon: boolean;
 };
 
+const ENABLE_DATASET_LOGGING =
+  (process.env.ENABLE_DATASET_LOGGING ?? "true").toLowerCase() === "true";
 const DATA_DIR = process.env.RUNTIME_DATA_DIR ?? "runtime-data";
 const PRE_CANDIDATES_PATH = `${DATA_DIR}/pre_candidates.jsonl`;
 const CANDIDATES_PATH = `${DATA_DIR}/candidates.jsonl`;
 const OUTCOMES_PATH = `${DATA_DIR}/outcomes.jsonl`;
 
 async function appendJsonl(path: string, row: unknown): Promise<void> {
+  if (!ENABLE_DATASET_LOGGING) {
+    return;
+  }
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(row)}\n`, "utf8");
 }
@@ -86,6 +91,10 @@ export async function logPreCandidateRow(
   row: PreCandidateDatasetRow,
 ): Promise<void> {
   await appendJsonl(PRE_CANDIDATES_PATH, row);
+}
+
+export function isDatasetLoggingEnabled(): boolean {
+  return ENABLE_DATASET_LOGGING;
 }
 
 export async function logCandidateRow(row: CandidateDatasetRow): Promise<void> {

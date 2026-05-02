@@ -1,6 +1,6 @@
 # Token Screener Bot (Solana -> GMGN -> Meteora -> Telegram)
 
-Monitors Solana chain activity from now forward, extracts candidate token mints from watched addresses, filters by GMGN fee/market-cap ratio plus top-holder scalp-risk signals, then checks Meteora DLMM pool and sends Telegram alerts.
+Monitors Solana chain activity from now forward, extracts candidate token mints from watched addresses, filters by GMGN fee/market-cap ratio plus top-holder scalp-risk signals, then checks Meteora DLMM pool and sends Telegram alerts. Dataset logging can be toggled on or off with env.
 
 ## Flow
 
@@ -41,6 +41,7 @@ npm install
 - Optional: `NEW_DLMM_POOL_TIER2_INTERVAL_MS` (poll interval for Tier 2 preset addresses)
 - `WATCH_ADDRESSES` (comma-separated Solana addresses to monitor)
 - Optional: `WATCH_PROGRAM_IDS` (comma-separated program IDs for stronger bonding/migration filtering)
+- Optional: `ENABLE_DATASET_LOGGING` (default `true`, disables `runtime-data/*.jsonl` writes when set to `false`)
 - Optional: `SCAN_INTERVAL_MS` (default `15000`)
 - Optional: `ENABLE_LP_WALLET_TRACKER` (default `false`)
 - Optional: `LP_WALLET_TRACKER_INTERVAL_MS` (default `60000`)
