@@ -1,6 +1,6 @@
 # Token Screener Bot (Solana -> GMGN -> Meteora -> Telegram)
 
-Monitors Solana chain activity from now forward, extracts candidate token mints from watched addresses, filters by GMGN fee/market-cap ratio, then checks Meteora DLMM pool and sends Telegram alerts.
+Monitors Solana chain activity from now forward, extracts candidate token mints from watched addresses, filters by GMGN fee/market-cap ratio plus top-holder scalp-risk signals, then checks Meteora DLMM pool and sends Telegram alerts.
 
 ## Flow
 
@@ -54,6 +54,7 @@ npm install
 - Optional: `FORWARD_ALL_MIGRATED` (default `false`)
 - Optional: `MIN_SOL_PER_10K_MC` (default `0.8`)
 - Optional: `MAX_SOL_PER_10K_MC` (default `1`)
+- Optional top-holder scalp-risk knobs: `TOP_HOLDER_ANALYSIS_COUNT`, `TOP_HOLDER_FUNDING_LOOKBACK_SIGNATURES`, `TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS`, `TOP_HOLDER_EQUAL_BALANCE_MIN_REPEAT_RATE`, `TOP_HOLDER_EQUAL_SUPPLY_MIN_REPEAT_RATE`, `TOP_HOLDER_SUPPLY_UNIFORMITY_MAX_CV`
 - Optional: `MIN_TWO_CANDLE_AVG_VOLUME` (default `18000`)
 - Optional: `PIPELINE_SUMMARY_EVERY_TICKS` (default `20`, set `0` to disable)
 - Optional: `GMGN_RETRY_COUNT` (default `5`)
@@ -76,6 +77,7 @@ npm run dev
 - BONK.fun Raydium LaunchLab migrations are extracted directly from the migration instruction mint account, which avoids false candidates from LP/NFT mints in the same tx.
 - Meteora Curve migrations are also extracted directly from the migration instruction mint account, which avoids mixing in the Meteora position NFT mint from the same tx.
 - Alerts use explicit titles: `Token Migration` for migration alerts and `GMGN Trending` for the separate trending engine.
+- Migration scoring now also checks short-term scalpability signals from top holders, including very-young funding sources, overly uniform holder balances, overly even supply splits, and weak fee-to-market-cap ratio.
 - Optional LP wallet tracker: poll labeled Solana wallets and alert when a tracked wallet opens a new Meteora DLMM position.
 - Optional temporary wallet activity tracker: poll labeled Solana wallets and alert every newly seen transaction signature for those wallets.
 - Preferred wallet input is a JSON file like `tracked-lp-wallets.json` (see `tracked-lp-wallets.example.json`); `.env` wallet list is kept as a legacy fallback.

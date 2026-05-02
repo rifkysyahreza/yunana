@@ -42,6 +42,12 @@ export type ScreenFeatures = {
   ratTraderWallets: number | null;
   whaleWallets: number | null;
   topWallets: number | null;
+  topHolderFundingSourceAvgAgeHours: number | null;
+  topHolderFundingSourceKnownCount: number | null;
+  topHolderYoungFundingSourceCount: number | null;
+  topHolderRepeatedBalanceRate: number | null;
+  topHolderRepeatedSupplyRate: number | null;
+  topHolderSupplyUniformityCv: number | null;
   fastSniperCount: number | null;
   topBuyersHolderCount: number | null;
   topBuyersSoldCount: number | null;
@@ -112,6 +118,10 @@ export type ScreenerConfig = {
   maxTopBuyerSoldRatio: number;
   maxBuyTax: number;
   maxSellTax: number;
+  maxTopHolderFundingSourceAvgAgeHours: number;
+  minRepeatedTopHolderBalanceRate: number;
+  minRepeatedTopHolderSupplyRate: number;
+  maxTopHolderSupplyUniformityCv: number;
   strongScoreThreshold: number;
   tradeableScoreThreshold: number;
   watchScoreThreshold: number;
@@ -142,6 +152,12 @@ export type BuildScreenFeaturesInput = {
   ratTraderWallets?: number | null;
   whaleWallets?: number | null;
   topWallets?: number | null;
+  topHolderFundingSourceAvgAgeHours?: number | null;
+  topHolderFundingSourceKnownCount?: number | null;
+  topHolderYoungFundingSourceCount?: number | null;
+  topHolderRepeatedBalanceRate?: number | null;
+  topHolderRepeatedSupplyRate?: number | null;
+  topHolderSupplyUniformityCv?: number | null;
   fastSniperCount?: number | null;
   topBuyersHolderCount?: number | null;
   topBuyersSoldCount?: number | null;
@@ -259,6 +275,15 @@ export function buildScreenFeatures(input: BuildScreenFeaturesInput): ScreenFeat
     ratTraderWallets: input.ratTraderWallets ?? null,
     whaleWallets: input.whaleWallets ?? null,
     topWallets: input.topWallets ?? null,
+    topHolderFundingSourceAvgAgeHours:
+      input.topHolderFundingSourceAvgAgeHours ?? null,
+    topHolderFundingSourceKnownCount:
+      input.topHolderFundingSourceKnownCount ?? null,
+    topHolderYoungFundingSourceCount:
+      input.topHolderYoungFundingSourceCount ?? null,
+    topHolderRepeatedBalanceRate: input.topHolderRepeatedBalanceRate ?? null,
+    topHolderRepeatedSupplyRate: input.topHolderRepeatedSupplyRate ?? null,
+    topHolderSupplyUniformityCv: input.topHolderSupplyUniformityCv ?? null,
     fastSniperCount: input.fastSniperCount ?? null,
     topBuyersHolderCount: input.topBuyersHolderCount ?? null,
     topBuyersSoldCount: input.topBuyersSoldCount ?? null,
@@ -555,6 +580,68 @@ export function scoreScreenFeatures(
   ) {
     riskPenalty += 8;
   }
+  if (
+    features.topHolderFundingSourceAvgAgeHours !== null &&
+    features.topHolderFundingSourceAvgAgeHours <=
+      config.maxTopHolderFundingSourceAvgAgeHours
+  ) {
+    riskPenalty += 10;
+  }
+  if (
+    features.topHolderRepeatedBalanceRate !== null &&
+    features.topHolderRepeatedBalanceRate >=
+      config.minRepeatedTopHolderBalanceRate
+  ) {
+    riskPenalty += 10;
+  }
+  if (
+    features.topHolderSupplyUniformityCv !== null &&
+    features.topHolderSupplyUniformityCv <=
+      config.maxTopHolderSupplyUniformityCv
+  ) {
+    riskPenalty += 10;
+  }
+
+  const scalpRiskFlags: string[] = [];
+  if (
+    features.topHolderFundingSourceAvgAgeHours !== null &&
+    features.topHolderFundingSourceAvgAgeHours <=
+      config.maxTopHolderFundingSourceAvgAgeHours
+  ) {
+    scalpRiskFlags.push(
+      `top-holder funders avg ${features.topHolderFundingSourceAvgAgeHours.toFixed(1)}h old`,
+    );
+  }
+  if (
+    features.topHolderRepeatedBalanceRate !== null &&
+    features.topHolderRepeatedBalanceRate >=
+      config.minRepeatedTopHolderBalanceRate
+  ) {
+    scalpRiskFlags.push(
+      `top-holder balances too similar ${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`,
+    );
+  }
+  if (
+    features.topHolderRepeatedSupplyRate !== null &&
+    features.topHolderRepeatedSupplyRate >=
+      config.minRepeatedTopHolderSupplyRate
+  ) {
+    scalpRiskFlags.push(
+      `top-holder supply split too even ${(features.topHolderRepeatedSupplyRate * 100).toFixed(0)}%`,
+    );
+  }
+  if (
+    features.solPer10kMc !== null &&
+    (features.solPer10kMc < config.minSolPer10kMc ||
+      features.solPer10kMc > config.maxSolPer10kMc)
+  ) {
+    scalpRiskFlags.push(`fee/mcap weak ${features.solPer10kMc.toFixed(3)}`);
+  }
+  if (scalpRiskFlags.length >= 3) {
+    rejectReasons.push(`scalp risk flags ${scalpRiskFlags.length}/4`);
+  } else if (scalpRiskFlags.length === 2) {
+    riskPenalty += 12;
+  }
 
   const finalScore = Math.round(structureScore + flowScore + poolScore - riskPenalty);
 
@@ -566,6 +653,9 @@ export function scoreScreenFeatures(
   }
   if (features.top10HolderRate !== null) {
     reasons.push(`top10 ${(features.top10HolderRate * 100).toFixed(1)}%`);
+  }
+  if (features.topHolderFundingSourceAvgAgeHours !== null) {
+    reasons.push(`holder-funder age ${features.topHolderFundingSourceAvgAgeHours.toFixed(1)}h`);
   }
   if (features.topBundlerTraderPercentage !== null) {
     reasons.push(`bundler ${(features.topBundlerTraderPercentage * 100).toFixed(1)}%`);
@@ -617,6 +707,27 @@ export function scoreScreenFeatures(
     redFlags.push("top10 concentration elevated");
   }
   if (
+    features.topHolderFundingSourceAvgAgeHours !== null &&
+    features.topHolderFundingSourceAvgAgeHours <=
+      config.maxTopHolderFundingSourceAvgAgeHours
+  ) {
+    redFlags.push("top-holder funders look too new");
+  }
+  if (
+    features.topHolderRepeatedBalanceRate !== null &&
+    features.topHolderRepeatedBalanceRate >=
+      config.minRepeatedTopHolderBalanceRate
+  ) {
+    redFlags.push("top-holder balances too similar");
+  }
+  if (
+    features.topHolderRepeatedSupplyRate !== null &&
+    features.topHolderRepeatedSupplyRate >=
+      config.minRepeatedTopHolderSupplyRate
+  ) {
+    redFlags.push("top-holder supply split too even");
+  }
+  if (
     features.ratTraderWallets !== null &&
     features.holderCount !== null &&
     features.holderCount > 0 &&
@@ -653,6 +764,16 @@ export function scoreScreenFeatures(
     features.smartWallets / features.holderCount >= 0.01
   ) {
     greenFlags.push("smart wallet participation present");
+  }
+  if (
+    features.topHolderFundingSourceAvgAgeHours !== null &&
+    features.topHolderFundingSourceAvgAgeHours >
+      config.maxTopHolderFundingSourceAvgAgeHours
+  ) {
+    greenFlags.push("top-holder funders not ultra-fresh");
+  }
+  if (scalpRiskFlags.length <= 1) {
+    greenFlags.push(`scalp risk flags ${scalpRiskFlags.length}/4`);
   }
 
   let verdict: ScreenScore["verdict"] = "reject";

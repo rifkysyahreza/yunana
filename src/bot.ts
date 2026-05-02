@@ -36,6 +36,41 @@ type SignatureInfo = {
   blockTime?: number;
 };
 
+type TokenLargestAccount = {
+  address?: string;
+  amount?: string;
+  uiAmount?: number;
+  uiAmountString?: string;
+  decimals?: number;
+};
+
+type ParsedAccountInfoResponse = {
+  value?: {
+    data?: {
+      parsed?: {
+        info?: {
+          owner?: string;
+          tokenAmount?: {
+            uiAmount?: number;
+            uiAmountString?: string;
+            amount?: string;
+            decimals?: number;
+          };
+        };
+      };
+    };
+  } | null;
+};
+
+type TokenSupplyResponse = {
+  value?: {
+    amount?: string;
+    uiAmount?: number;
+    uiAmountString?: string;
+    decimals?: number;
+  };
+};
+
 type ParsedTransaction = {
   transaction: {
     message: {
@@ -44,7 +79,7 @@ type ParsedTransaction = {
         programId?: string;
         accounts?: string[];
         data?: string;
-        parsed?: { type?: string };
+        parsed?: { type?: string; info?: Record<string, unknown> };
       }>;
     };
   };
@@ -209,6 +244,16 @@ type MeteoraPool = {
   };
   token_x?: { address?: string; symbol?: string };
   token_y?: { address?: string; symbol?: string };
+};
+
+type TopHolderFundingAnalysis = {
+  holderCountAnalyzed: number;
+  fundingSourceKnownCount: number;
+  fundingSourceAvgAgeHours: number | null;
+  youngFundingSourceCount: number;
+  repeatedBalanceRate: number | null;
+  repeatedSupplyRate: number | null;
+  supplyUniformityCv: number | null;
 };
 
 type MeteoraPoolType = "dlmm" | "damm_v2";
@@ -434,6 +479,18 @@ const SCREENER_CONFIG: ScreenerConfig = {
   maxTopBuyerSoldRatio: Number(process.env.MAX_TOP_BUYER_SOLD_RATIO ?? "0.9"),
   maxBuyTax: Number(process.env.MAX_BUY_TAX ?? "0"),
   maxSellTax: Number(process.env.MAX_SELL_TAX ?? "0"),
+  maxTopHolderFundingSourceAvgAgeHours: Number(
+    process.env.TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS ?? "24",
+  ),
+  minRepeatedTopHolderBalanceRate: Number(
+    process.env.TOP_HOLDER_EQUAL_BALANCE_MIN_REPEAT_RATE ?? "0.6",
+  ),
+  minRepeatedTopHolderSupplyRate: Number(
+    process.env.TOP_HOLDER_EQUAL_SUPPLY_MIN_REPEAT_RATE ?? "0.6",
+  ),
+  maxTopHolderSupplyUniformityCv: Number(
+    process.env.TOP_HOLDER_SUPPLY_UNIFORMITY_MAX_CV ?? "0.12",
+  ),
   strongScoreThreshold: Number(process.env.STRONG_SCORE_THRESHOLD ?? "65"),
   tradeableScoreThreshold: Number(
     process.env.TRADEABLE_SCORE_THRESHOLD ?? "45",
@@ -485,6 +542,26 @@ const LP_TRACKED_WALLETS_FILE =
   process.env.LP_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-lp-wallets.json");
 const WALLET_ACTIVITY_TRACKED_WALLETS_FILE =
   process.env.WALLET_ACTIVITY_TRACKED_WALLETS_FILE ?? path.join(process.cwd(), "tracked-wallet-activity-wallets.json");
+const TOP_HOLDER_ANALYSIS_COUNT = Math.max(
+  3,
+  Number(process.env.TOP_HOLDER_ANALYSIS_COUNT ?? "9"),
+);
+const TOP_HOLDER_FUNDING_LOOKBACK_SIGNATURES = Math.max(
+  5,
+  Number(process.env.TOP_HOLDER_FUNDING_LOOKBACK_SIGNATURES ?? "12"),
+);
+const TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS = Number(
+  process.env.TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS ?? "24",
+);
+const TOP_HOLDER_EQUAL_BALANCE_MIN_REPEAT_RATE = Number(
+  process.env.TOP_HOLDER_EQUAL_BALANCE_MIN_REPEAT_RATE ?? "0.6",
+);
+const TOP_HOLDER_EQUAL_SUPPLY_MIN_REPEAT_RATE = Number(
+  process.env.TOP_HOLDER_EQUAL_SUPPLY_MIN_REPEAT_RATE ?? "0.6",
+);
+const TOP_HOLDER_SUPPLY_UNIFORMITY_MAX_CV = Number(
+  process.env.TOP_HOLDER_SUPPLY_UNIFORMITY_MAX_CV ?? "0.12",
+);
 const LP_TRACKED_WALLETS = loadTrackedLpWallets();
 const WALLET_ACTIVITY_TRACKED_WALLETS = loadTrackedWalletActivityWallets();
 const WATCH_ADDRESSES = splitCsv(process.env.WATCH_ADDRESSES);
@@ -1458,9 +1535,10 @@ async function processMintCandidate(
       return;
     }
 
-    const [dlmmPool, dammV2Pool] = await Promise.all([
+    const [dlmmPool, dammV2Pool, topHolderFunding] = await Promise.all([
       searchMeteoraPoolByType(mint, "dlmm"),
       searchMeteoraPoolByType(mint, "damm_v2"),
+      analyzeTopHolderFunding(mint),
     ]);
     const latestQuotedMarketCap = await fetchGmgnQuoteMarketCap(mint);
     const latestMarketCap = latestQuotedMarketCap ?? marketCap;
@@ -1504,6 +1582,18 @@ async function processMintCandidate(
       ratTraderWallets: tagWalletCount?.rat_trader_wallets ?? null,
       whaleWallets: tagWalletCount?.whale_wallets ?? null,
       topWallets: tagWalletCount?.top_wallets ?? null,
+      topHolderFundingSourceAvgAgeHours:
+        topHolderFunding?.fundingSourceAvgAgeHours ?? null,
+      topHolderFundingSourceKnownCount:
+        topHolderFunding?.fundingSourceKnownCount ?? null,
+      topHolderYoungFundingSourceCount:
+        topHolderFunding?.youngFundingSourceCount ?? null,
+      topHolderRepeatedBalanceRate:
+        topHolderFunding?.repeatedBalanceRate ?? null,
+      topHolderRepeatedSupplyRate:
+        topHolderFunding?.repeatedSupplyRate ?? null,
+      topHolderSupplyUniformityCv:
+        topHolderFunding?.supplyUniformityCv ?? null,
       fastSniperCount,
       topBuyersHolderCount: topBuyers?.holders?.holder_count ?? null,
       topBuyersSoldCount: topBuyers?.holders?.statusNow?.sold ?? null,
@@ -2728,6 +2818,7 @@ async function sendTelegramAlert(
     `2C Avg Vol: ${fmtNum(twoCandleAvgVolume)} | B/S 1m: ${features.buySellRatio1m === null ? "Unknown" : features.buySellRatio1m.toFixed(2)}`,
     `Top10: ${features.top10HolderRate === null ? "Unknown" : `${(features.top10HolderRate * 100).toFixed(1)}%`} | Top buyers sold: ${features.topBuyersHolderCount && features.topBuyersSoldCount !== null ? `${((features.topBuyersSoldCount / features.topBuyersHolderCount) * 100).toFixed(1)}%` : "Unknown"}`,
     `Smart: ${features.smartWallets === null ? "Unknown" : String(features.smartWallets)} | Rat: ${features.ratTraderWallets === null ? "Unknown" : String(features.ratTraderWallets)} | Fast snipers: ${features.fastSniperCount === null ? "Unknown" : String(features.fastSniperCount)}`,
+    `Holder funder age: ${features.topHolderFundingSourceAvgAgeHours === null ? "Unknown" : `${features.topHolderFundingSourceAvgAgeHours.toFixed(1)}h`} | Equal bal: ${features.topHolderRepeatedBalanceRate === null ? "Unknown" : `${(features.topHolderRepeatedBalanceRate * 100).toFixed(0)}%`} | Uniform cv: ${features.topHolderSupplyUniformityCv === null ? "Unknown" : features.topHolderSupplyUniformityCv.toFixed(3)}`,
     "",
     `<u>Pools</u>`,
     `DLMM: ${dlmmPoolAddress === "None" ? "None" : `<code>${escapeHtml(dlmmPoolAddress)}</code>`}`,
@@ -2925,6 +3016,222 @@ function isAllowedTelegramUser(senderId: number | string | undefined): boolean {
 async function respondPong(chatId: number | string): Promise<void> {
   const uptimeSec = Math.floor((Date.now() - BOT_STARTED_AT) / 1000);
   await sendTelegramPlainMessage(chatId, `pong\nuptime: ${uptimeSec}s`);
+}
+
+async function analyzeTopHolderFunding(
+  mint: string,
+): Promise<TopHolderFundingAnalysis | null> {
+  try {
+    const [largestAccounts, supply] = await Promise.all([
+      getTokenLargestAccounts(mint),
+      getTokenSupply(mint),
+    ]);
+    const rankedAccounts = largestAccounts.slice(1, 1 + TOP_HOLDER_ANALYSIS_COUNT);
+    if (rankedAccounts.length === 0) {
+      return null;
+    }
+
+    const balances: number[] = [];
+    const supplyShares: number[] = [];
+    const fundingSourceAges: number[] = [];
+    let youngFundingSourceCount = 0;
+
+    for (const account of rankedAccounts) {
+      const tokenAccount = account.address;
+      const balance =
+        toNumber(account.uiAmount) ??
+        toNumber(account.uiAmountString) ??
+        toNumber(account.amount);
+      if (!tokenAccount || balance === null || balance <= 0) {
+        continue;
+      }
+
+      balances.push(balance);
+      if (supply !== null && supply > 0) {
+        supplyShares.push(balance / supply);
+      }
+
+      const owner = await getTokenAccountOwner(tokenAccount);
+      if (!owner) {
+        continue;
+      }
+      const fundingSource = await findRecentInboundFundingSource(owner);
+      if (!fundingSource) {
+        continue;
+      }
+      const fundingAge = await estimateAddressAgeHours(
+        fundingSource,
+        TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS,
+      );
+      if (fundingAge === null) {
+        continue;
+      }
+      fundingSourceAges.push(fundingAge);
+      if (fundingAge <= TOP_HOLDER_FUNDING_YOUNG_MAX_AGE_HOURS) {
+        youngFundingSourceCount += 1;
+      }
+    }
+
+    const repeatedBalanceRate = calculateDominantRepeatRate(
+      balances.map((value) => value.toFixed(6)),
+    );
+    const repeatedSupplyRate = calculateDominantRepeatRate(
+      supplyShares.map((value) => (value * 10000).toFixed(0)),
+    );
+    const supplyUniformityCv = calculateCoefficientOfVariation(supplyShares);
+    const fundingSourceAvgAgeHours =
+      fundingSourceAges.length > 0
+        ? fundingSourceAges.reduce((sum, value) => sum + value, 0) /
+          fundingSourceAges.length
+        : null;
+
+    return {
+      holderCountAnalyzed: balances.length,
+      fundingSourceKnownCount: fundingSourceAges.length,
+      fundingSourceAvgAgeHours,
+      youngFundingSourceCount,
+      repeatedBalanceRate,
+      repeatedSupplyRate,
+      supplyUniformityCv,
+    };
+  } catch (err) {
+    console.error(`[holder-funding] analysis failed mint=${mint}`, err);
+    return null;
+  }
+}
+
+async function getTokenLargestAccounts(
+  mint: string,
+): Promise<TokenLargestAccount[]> {
+  const result = await rpcCall<{ value?: TokenLargestAccount[] }>(
+    "getTokenLargestAccounts",
+    [mint, { commitment: "confirmed" }],
+  );
+  return Array.isArray(result?.value) ? result.value : [];
+}
+
+async function getTokenSupply(mint: string): Promise<number | null> {
+  const result = await rpcCall<TokenSupplyResponse>("getTokenSupply", [
+    mint,
+    { commitment: "confirmed" },
+  ]);
+  return (
+    toNumber(result?.value?.uiAmount) ??
+    toNumber(result?.value?.uiAmountString) ??
+    toNumber(result?.value?.amount)
+  );
+}
+
+async function getTokenAccountOwner(tokenAccount: string): Promise<string | null> {
+  const result = await rpcCall<ParsedAccountInfoResponse>("getAccountInfo", [
+    tokenAccount,
+    { encoding: "jsonParsed", commitment: "confirmed" },
+  ]);
+  const owner = result?.value?.data?.parsed?.info?.owner;
+  return typeof owner === "string" && owner.length > 0 ? owner : null;
+}
+
+async function findRecentInboundFundingSource(
+  walletAddress: string,
+): Promise<string | null> {
+  const sigs = await getSignaturesForAddress(
+    walletAddress,
+    TOP_HOLDER_FUNDING_LOOKBACK_SIGNATURES,
+  );
+  for (const sig of sigs) {
+    if (sig.err) {
+      continue;
+    }
+    const tx = await getParsedTransaction(sig.signature);
+    const source = extractInboundFundingSourceFromTx(tx, walletAddress);
+    if (source) {
+      return source;
+    }
+  }
+  return null;
+}
+
+function extractInboundFundingSourceFromTx(
+  tx: ParsedTransaction | null,
+  walletAddress: string,
+): string | null {
+  const instructions = tx?.transaction?.message?.instructions ?? [];
+  for (const ix of instructions) {
+    const info = ix.parsed?.info;
+    if (!info) {
+      continue;
+    }
+    const destination = typeof info.destination === "string" ? info.destination : null;
+    const source = typeof info.source === "string" ? info.source : null;
+    if (destination === walletAddress && source && source !== walletAddress) {
+      return source;
+    }
+  }
+  return null;
+}
+
+async function estimateAddressAgeHours(
+  address: string,
+  thresholdHours: number,
+): Promise<number | null> {
+  const thresholdSeconds = thresholdHours * 3600;
+  const nowSeconds = Date.now() / 1000;
+  let before: string | undefined;
+  let oldestBlockTime: number | null = null;
+
+  for (let page = 0; page < 5; page += 1) {
+    const sigs = await getSignaturesForAddress(address, 100, before);
+    if (sigs.length === 0) {
+      break;
+    }
+
+    const oldestWithTime = [...sigs].reverse().find((sig) => typeof sig.blockTime === "number");
+    if (oldestWithTime?.blockTime) {
+      oldestBlockTime = oldestWithTime.blockTime;
+      if (nowSeconds - oldestBlockTime >= thresholdSeconds) {
+        return (nowSeconds - oldestBlockTime) / 3600;
+      }
+    }
+
+    if (sigs.length < 100) {
+      if (oldestBlockTime !== null) {
+        return (nowSeconds - oldestBlockTime) / 3600;
+      }
+      break;
+    }
+
+    before = sigs[sigs.length - 1]?.signature;
+    if (!before) {
+      break;
+    }
+  }
+
+  return null;
+}
+
+function calculateDominantRepeatRate(values: string[]): number | null {
+  if (values.length === 0) {
+    return null;
+  }
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  const maxCount = Math.max(...counts.values());
+  return maxCount / values.length;
+}
+
+function calculateCoefficientOfVariation(values: number[]): number | null {
+  if (values.length < 2) {
+    return null;
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  if (mean <= 0) {
+    return null;
+  }
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance) / mean;
 }
 
 async function sendTelegramPlainMessage(
